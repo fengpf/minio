@@ -18,26 +18,36 @@ package cmd
 
 import (
 	"crypto/x509"
+	"encoding/gob"
 	"errors"
+	"fmt"
 	"net"
+	"net/url"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
 	dns2 "github.com/miekg/dns"
 	"github.com/minio/cli"
-	"github.com/minio/minio-go/v6/pkg/set"
+	"github.com/minio/minio-go/v7/pkg/set"
 	"github.com/minio/minio/cmd/config"
-	"github.com/minio/minio/cmd/config/etcd"
 	"github.com/minio/minio/cmd/logger"
 	"github.com/minio/minio/pkg/auth"
 	"github.com/minio/minio/pkg/certs"
-	"github.com/minio/minio/pkg/dns"
 	"github.com/minio/minio/pkg/env"
 )
 
+func init() {
+	logger.Init(GOPATH, GOROOT)
+	logger.RegisterError(config.FmtError)
+
+	gob.Register(StorageErr(""))
+}
+
 func verifyObjectLayerFeatures(name string, objAPI ObjectLayer) {
-	if (globalAutoEncryption || GlobalKMS != nil) && !objAPI.IsEncryptionSupported() {
+	if (GlobalKMS != nil) && !objAPI.IsEncryptionSupported() {
 		logger.Fatal(errInvalidArgument,
 			"Encryption support is requested but '%s' does not support encryption", name)
 	}
@@ -49,7 +59,7 @@ func verifyObjectLayerFeatures(name string, objAPI ObjectLayer) {
 		}
 	}
 
-	if globalIsCompressionEnabled && !objAPI.IsCompressionSupported() {
+	if globalCompressConfig.Enabled && !objAPI.IsCompressionSupported() {
 		logger.Fatal(errInvalidArgument,
 			"Compression support is requested but '%s' does not support compression", name)
 	}
@@ -57,16 +67,43 @@ func verifyObjectLayerFeatures(name string, objAPI ObjectLayer) {
 
 // Check for updates and print a notification message
 func checkUpdate(mode string) {
+	updateURL := minioReleaseInfoURL
+	if runtime.GOOS == globalWindowsOSName {
+		updateURL = minioReleaseWindowsInfoURL
+	}
+
+	u, err := url.Parse(updateURL)
+	if err != nil {
+		return
+	}
+
 	// Its OK to ignore any errors during doUpdate() here.
-	if updateMsg, _, currentReleaseTime, latestReleaseTime, err := getUpdateInfo(2*time.Second, mode); err == nil {
-		if updateMsg == "" {
-			return
-		}
-		if globalInplaceUpdateDisabled {
-			logStartupMessage(updateMsg)
-		} else {
-			logStartupMessage(prepareUpdateMessage("Run `mc admin update`", latestReleaseTime.Sub(currentReleaseTime)))
-		}
+	crTime, err := GetCurrentReleaseTime()
+	if err != nil {
+		return
+	}
+
+	_, lrTime, err := getLatestReleaseTime(u, 2*time.Second, mode)
+	if err != nil {
+		return
+	}
+
+	var older time.Duration
+	var downloadURL string
+	if lrTime.After(crTime) {
+		older = lrTime.Sub(crTime)
+		downloadURL = getDownloadURL(releaseTimeToReleaseTag(lrTime))
+	}
+
+	updateMsg := prepareUpdateMessage(downloadURL, older)
+	if updateMsg == "" {
+		return
+	}
+
+	if globalInplaceUpdateDisabled {
+		logStartupMessage(updateMsg)
+	} else {
+		logStartupMessage(prepareUpdateMessage("Run `mc admin update`", lrTime.Sub(crTime)))
 	}
 }
 
@@ -134,8 +171,14 @@ func handleCommonCmdArgs(ctx *cli.Context) {
 
 	// Fetch address option
 	globalCLIContext.Addr = ctx.GlobalString("address")
-	if globalCLIContext.Addr == "" || globalCLIContext.Addr == ":"+globalMinioDefaultPort {
+	if globalCLIContext.Addr == "" || globalCLIContext.Addr == ":"+GlobalMinioDefaultPort {
 		globalCLIContext.Addr = ctx.String("address")
+	}
+
+	// Check "no-compat" flag from command line argument.
+	globalCLIContext.StrictS3Compat = true
+	if ctx.IsSet("no-compat") || ctx.GlobalIsSet("no-compat") {
+		globalCLIContext.StrictS3Compat = false
 	}
 
 	// Set all config, certs and CAs directories.
@@ -153,46 +196,30 @@ func handleCommonCmdArgs(ctx *cli.Context) {
 	globalCertsCADir = &ConfigDir{path: filepath.Join(globalCertsDir.Get(), certsCADir)}
 
 	logger.FatalIf(mkdirAllIgnorePerm(globalCertsCADir.Get()), "Unable to create certs CA directory at %s", globalCertsCADir.Get())
-
-	// Check "compat" flag from command line argument.
-	globalCLIContext.StrictS3Compat = ctx.IsSet("compat") || ctx.GlobalIsSet("compat")
 }
 
 func handleCommonEnvVars() {
-	accessKey := env.Get(config.EnvAccessKey, "")
-	secretKey := env.Get(config.EnvSecretKey, "")
-	if accessKey != "" && secretKey != "" {
-		cred, err := auth.CreateCredentials(accessKey, secretKey)
-		if err != nil {
-			logger.Fatal(config.ErrInvalidCredentials(err), "Unable to validate credentials inherited from the shell environment")
-		}
-		cred.Expiration = timeSentinel
-
-		// credential Envs are set globally.
-		globalIsEnvCreds = true
-		globalActiveCred = cred
-	}
-
-	if browser := env.Get(config.EnvBrowser, "on"); browser != "" {
-		browserFlag, err := config.ParseBoolFlag(browser)
-		if err != nil {
-			logger.Fatal(config.ErrInvalidBrowserValue(nil).Msg("Unknown value `%s`", browser), "Invalid MINIO_BROWSER value in environment variable")
-		}
-
-		// browser Envs are set globally, this does not represent
-		// if browser is turned off or on.
-		globalIsEnvBrowser = true
-		globalIsBrowserEnabled = bool(browserFlag)
-	}
-
-	var err error
-	globalEtcdClient, err = etcd.New(globalRootCAs)
+	wormEnabled, err := config.LookupWorm()
 	if err != nil {
-		logger.FatalIf(err, "Unable to initialize etcd config")
+		logger.Fatal(config.ErrInvalidWormValue(err), "Invalid worm configuration")
+	}
+	if wormEnabled {
+		logger.Fatal(errors.New("WORM is deprecated"), "global MINIO_WORM support is removed, please downgrade your server or migrate to https://github.com/minio/minio/tree/master/docs/retention")
 	}
 
-	for _, domainName := range strings.Split(env.Get(config.EnvDomain, ""), ",") {
-		if domainName != "" {
+	globalBrowserEnabled, err = config.ParseBool(env.Get(config.EnvBrowser, config.EnableOn))
+	if err != nil {
+		logger.Fatal(config.ErrInvalidBrowserValue(err), "Invalid MINIO_BROWSER value in environment variable")
+	}
+
+	globalFSOSync, err = config.ParseBool(env.Get(config.EnvFSOSync, config.EnableOff))
+	if err != nil {
+		logger.Fatal(config.ErrInvalidFSOSyncValue(err), "Invalid MINIO_FS_OSYNC value in environment variable")
+	}
+
+	domains := env.Get(config.EnvDomain, "")
+	if len(domains) != 0 {
+		for _, domainName := range strings.Split(domains, config.ValueSeparator) {
 			if _, ok := dns2.IsDomainName(domainName); !ok {
 				logger.Fatal(config.ErrInvalidDomainValue(nil).Msg("Unknown value `%s`", domainName),
 					"Invalid MINIO_DOMAIN value in environment variable")
@@ -201,9 +228,9 @@ func handleCommonEnvVars() {
 		}
 	}
 
-	minioEndpointsEnv, ok := env.Lookup(config.EnvPublicIPs)
-	if ok {
-		minioEndpoints := strings.Split(minioEndpointsEnv, ",")
+	publicIPs := env.Get(config.EnvPublicIPs, "")
+	if len(publicIPs) != 0 {
+		minioEndpoints := strings.Split(publicIPs, config.ValueSeparator)
 		var domainIPs = set.NewStringSet()
 		for _, endpoint := range minioEndpoints {
 			if net.ParseIP(endpoint) == nil {
@@ -215,7 +242,6 @@ func handleCommonEnvVars() {
 				for _, addr := range addrs {
 					domainIPs.Add(addr)
 				}
-				continue
 			}
 			domainIPs.Add(endpoint)
 		}
@@ -223,43 +249,48 @@ func handleCommonEnvVars() {
 	} else {
 		// Add found interfaces IP address to global domain IPS,
 		// loopback addresses will be naturally dropped.
-		updateDomainIPs(localIP4)
-	}
-
-	if len(globalDomainNames) != 0 && !globalDomainIPs.IsEmpty() && globalEtcdClient != nil {
-		var err error
-		globalDNSConfig, err = dns.NewCoreDNS(globalDomainNames, globalDomainIPs, globalMinioPort, globalEtcdClient)
-		logger.FatalIf(err, "Unable to initialize DNS config for %s.", globalDomainNames)
+		domainIPs := mustGetLocalIP4()
+		for _, host := range globalEndpoints.Hostnames() {
+			domainIPs.Add(host)
+		}
+		updateDomainIPs(domainIPs)
 	}
 
 	// In place update is true by default if the MINIO_UPDATE is not set
 	// or is not set to 'off', if MINIO_UPDATE is set to 'off' then
 	// in-place update is off.
-	globalInplaceUpdateDisabled = strings.EqualFold(env.Get(config.EnvUpdate, "off"), "off")
+	globalInplaceUpdateDisabled = strings.EqualFold(env.Get(config.EnvUpdate, config.EnableOn), config.EnableOff)
 
-	// Get WORM environment variable.
-	if worm := env.Get(config.EnvWorm, "off"); worm != "" {
-		wormFlag, err := config.ParseBoolFlag(worm)
+	if env.IsSet(config.EnvAccessKey) || env.IsSet(config.EnvSecretKey) {
+		cred, err := auth.CreateCredentials(env.Get(config.EnvAccessKey, ""), env.Get(config.EnvSecretKey, ""))
 		if err != nil {
-			logger.Fatal(config.ErrInvalidWormValue(nil).Msg("Unknown value `%s`", worm), "Invalid MINIO_WORM value in environment variable")
+			logger.Fatal(config.ErrInvalidCredentials(err),
+				"Unable to validate credentials inherited from the shell environment")
 		}
-
-		// worm Envs are set globally, this does not represent
-		// if worm is turned off or on.
-		globalIsEnvWORM = true
-		globalWORMEnabled = bool(wormFlag)
+		globalActiveCred = cred
+		globalConfigEncrypted = true
 	}
 
+	if env.IsSet(config.EnvAccessKeyOld) && env.IsSet(config.EnvSecretKeyOld) {
+		oldCred, err := auth.CreateCredentials(env.Get(config.EnvAccessKeyOld, ""), env.Get(config.EnvSecretKeyOld, ""))
+		if err != nil {
+			logger.Fatal(config.ErrInvalidCredentials(err),
+				"Unable to validate the old credentials inherited from the shell environment")
+		}
+		globalOldCred = oldCred
+		os.Unsetenv(config.EnvAccessKeyOld)
+		os.Unsetenv(config.EnvSecretKeyOld)
+	}
 }
 
-func logStartupMessage(msg string, data ...interface{}) {
+func logStartupMessage(msg string) {
 	if globalConsoleSys != nil {
-		globalConsoleSys.Send(msg)
+		globalConsoleSys.Send(msg, string(logger.All))
 	}
-	logger.StartupMessage(msg, data...)
+	logger.StartupMessage(msg)
 }
 
-func getTLSConfig() (x509Certs []*x509.Certificate, c *certs.Certs, secureConn bool, err error) {
+func getTLSConfig() (x509Certs []*x509.Certificate, manager *certs.Manager, secureConn bool, err error) {
 	if !(isFile(getPublicCertFile()) && isFile(getPrivateKeyFile())) {
 		return nil, nil, false, nil
 	}
@@ -268,11 +299,71 @@ func getTLSConfig() (x509Certs []*x509.Certificate, c *certs.Certs, secureConn b
 		return nil, nil, false, err
 	}
 
-	c, err = certs.New(getPublicCertFile(), getPrivateKeyFile(), config.LoadX509KeyPair)
+	manager, err = certs.NewManager(GlobalContext, getPublicCertFile(), getPrivateKeyFile(), config.LoadX509KeyPair)
 	if err != nil {
 		return nil, nil, false, err
 	}
 
+	// MinIO has support for multiple certificates. It expects the following structure:
+	//  certs/
+	//   │
+	//   ├─ public.crt
+	//   ├─ private.key
+	//   │
+	//   ├─ example.com/
+	//   │   │
+	//   │   ├─ public.crt
+	//   │   └─ private.key
+	//   └─ foobar.org/
+	//      │
+	//      ├─ public.crt
+	//      └─ private.key
+	//   ...
+	//
+	// Therefore, we read all filenames in the cert directory and check
+	// for each directory whether it contains a public.crt and private.key.
+	// If so, we try to add it to certificate manager.
+	root, err := os.Open(globalCertsDir.Get())
+	if err != nil {
+		return nil, nil, false, err
+	}
+	defer root.Close()
+
+	files, err := root.Readdir(-1)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	for _, file := range files {
+		// Ignore all
+		// - regular files
+		// - "CAs" directory
+		// - any directory which starts with ".."
+		if file.Mode().IsRegular() || file.Name() == "CAs" || strings.HasPrefix(file.Name(), "..") {
+			continue
+		}
+		if file.Mode()&os.ModeSymlink == os.ModeSymlink {
+			file, err = os.Stat(filepath.Join(root.Name(), file.Name()))
+			if err != nil {
+				// not accessible ignore
+				continue
+			}
+			if !file.IsDir() {
+				continue
+			}
+		}
+
+		var (
+			certFile = filepath.Join(root.Name(), file.Name(), publicCertFile)
+			keyFile  = filepath.Join(root.Name(), file.Name(), privateKeyFile)
+		)
+		if !isFile(certFile) || !isFile(keyFile) {
+			continue
+		}
+		if err = manager.AddCertificate(certFile, keyFile); err != nil {
+			err = fmt.Errorf("Unable to load TLS certificate '%s,%s': %w", certFile, keyFile, err)
+			logger.LogIf(GlobalContext, err, logger.Minio)
+		}
+	}
 	secureConn = true
-	return x509Certs, c, secureConn, nil
+	return x509Certs, manager, secureConn, nil
 }

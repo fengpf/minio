@@ -1,5 +1,5 @@
 /*
- * MinIO Cloud Storage, (C) 2018 MinIO, Inc.
+ * MinIO Cloud Storage, (C) 2018-2019 MinIO, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,49 +17,62 @@
 package cmd
 
 const (
-	storageRESTVersion = "v9"
-	storageRESTPath    = minioReservedBucketPath + "/storage/" + storageRESTVersion + SlashSeparator
+	storageRESTVersion       = "v20" // Re-implementation of storage layer
+	storageRESTVersionPrefix = SlashSeparator + storageRESTVersion
+	storageRESTPrefix        = minioReservedBucketPath + "/storage"
 )
 
 const (
-	storageRESTMethodDiskInfo  = "diskinfo"
-	storageRESTMethodMakeVol   = "makevol"
-	storageRESTMethodStatVol   = "statvol"
-	storageRESTMethodDeleteVol = "deletevol"
-	storageRESTMethodListVols  = "listvols"
+	storageRESTMethodHealth               = "/health"
+	storageRESTMethodDiskInfo             = "/diskinfo"
+	storageRESTMethodCrawlAndGetDataUsage = "/crawlandgetdatausage"
+	storageRESTMethodMakeVol              = "/makevol"
+	storageRESTMethodMakeVolBulk          = "/makevolbulk"
+	storageRESTMethodStatVol              = "/statvol"
+	storageRESTMethodDeleteVol            = "/deletevol"
+	storageRESTMethodListVols             = "/listvols"
 
-	storageRESTMethodAppendFile     = "appendfile"
-	storageRESTMethodCreateFile     = "createfile"
-	storageRESTMethodWriteAll       = "writeall"
-	storageRESTMethodStatFile       = "statfile"
-	storageRESTMethodReadAll        = "readall"
-	storageRESTMethodReadFile       = "readfile"
-	storageRESTMethodReadFileStream = "readfilestream"
-	storageRESTMethodListDir        = "listdir"
-	storageRESTMethodWalk           = "walk"
-	storageRESTMethodDeleteFile     = "deletefile"
-	storageRESTMethodDeleteFileBulk = "deletefilebulk"
-	storageRESTMethodRenameFile     = "renamefile"
-	storageRESTMethodVerifyFile     = "verifyfile"
-	storageRESTMethodGetInstanceID  = "getinstanceid"
+	storageRESTMethodAppendFile     = "/appendfile"
+	storageRESTMethodCreateFile     = "/createfile"
+	storageRESTMethodWriteAll       = "/writeall"
+	storageRESTMethodWriteMetadata  = "/writemetadata"
+	storageRESTMethodDeleteVersion  = "/deleteversion"
+	storageRESTMethodReadVersion    = "/readversion"
+	storageRESTMethodRenameData     = "/renamedata"
+	storageRESTMethodCheckParts     = "/checkparts"
+	storageRESTMethodCheckFile      = "/checkfile"
+	storageRESTMethodReadAll        = "/readall"
+	storageRESTMethodReadFile       = "/readfile"
+	storageRESTMethodReadFileStream = "/readfilestream"
+	storageRESTMethodListDir        = "/listdir"
+	storageRESTMethodWalk           = "/walk"
+	storageRESTMethodWalkVersions   = "/walkversions"
+	storageRESTMethodWalkSplunk     = "/walksplunk"
+	storageRESTMethodDeleteFile     = "/deletefile"
+	storageRESTMethodDeleteVersions = "/deleteverions"
+	storageRESTMethodRenameFile     = "/renamefile"
+	storageRESTMethodVerifyFile     = "/verifyfile"
 )
 
 const (
-	storageRESTVolume     = "volume"
-	storageRESTDirPath    = "dir-path"
-	storageRESTFilePath   = "file-path"
-	storageRESTSrcVolume  = "source-volume"
-	storageRESTSrcPath    = "source-path"
-	storageRESTDstVolume  = "destination-volume"
-	storageRESTDstPath    = "destination-path"
-	storageRESTOffset     = "offset"
-	storageRESTLength     = "length"
-	storageRESTShardSize  = "shard-size"
-	storageRESTCount      = "count"
-	storageRESTMarkerPath = "marker"
-	storageRESTLeafFile   = "leaf-file"
-	storageRESTRecursive  = "recursive"
-	storageRESTBitrotAlgo = "bitrot-algo"
-	storageRESTBitrotHash = "bitrot-hash"
-	storageRESTInstanceID = "instance-id"
+	storageRESTVolume        = "volume"
+	storageRESTVolumes       = "volumes"
+	storageRESTDirPath       = "dir-path"
+	storageRESTFilePath      = "file-path"
+	storageRESTVersionID     = "version-id"
+	storageRESTTotalVersions = "total-versions"
+	storageRESTSrcVolume     = "source-volume"
+	storageRESTSrcPath       = "source-path"
+	storageRESTDataDir       = "data-dir"
+	storageRESTDstVolume     = "destination-volume"
+	storageRESTDstPath       = "destination-path"
+	storageRESTOffset        = "offset"
+	storageRESTLength        = "length"
+	storageRESTCount         = "count"
+	storageRESTMarkerPath    = "marker"
+	storageRESTRecursive     = "recursive"
+	storageRESTBitrotAlgo    = "bitrot-algo"
+	storageRESTBitrotHash    = "bitrot-hash"
+	storageRESTDiskID        = "disk-id"
+	storageRESTForceDelete   = "force-delete"
 )

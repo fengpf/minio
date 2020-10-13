@@ -1,120 +1,92 @@
 module github.com/minio/minio
 
-go 1.13
+go 1.14
 
 require (
-	cloud.google.com/go v0.38.0
-	contrib.go.opencensus.io/exporter/ocagent v0.6.0 // indirect
-	github.com/Azure/azure-sdk-for-go v33.4.0+incompatible
-	github.com/Azure/go-autorest v11.7.0+incompatible
-	github.com/DataDog/zstd v1.4.1 // indirect
-	github.com/Shopify/toxiproxy v2.1.4+incompatible // indirect
+	cloud.google.com/go v0.39.0
+	git.apache.org/thrift.git v0.13.0
+	github.com/Azure/azure-pipeline-go v0.2.2
+	github.com/Azure/azure-storage-blob-go v0.10.0
+	github.com/Azure/go-autorest/autorest/adal v0.9.1 // indirect
+	github.com/Shopify/sarama v1.24.1
 	github.com/StackExchange/wmi v0.0.0-20190523213315-cbe66965904d // indirect
 	github.com/alecthomas/participle v0.2.1
-	github.com/aliyun/aliyun-oss-go-sdk v0.0.0-20190307165228-86c17b95fcd5
-	github.com/aws/aws-sdk-go v1.20.21
 	github.com/bcicen/jstream v0.0.0-20190220045926-16c1f8af81c2
+	github.com/beevik/ntp v0.2.0
+	github.com/cespare/xxhash/v2 v2.1.1
 	github.com/cheggaaa/pb v1.0.28
+	github.com/colinmarc/hdfs/v2 v2.1.1
 	github.com/coredns/coredns v1.4.0
-	github.com/coreos/etcd v3.3.12+incompatible
-	github.com/coreos/go-semver v0.3.0 // indirect
-	github.com/coreos/pkg v0.0.0-20180928190104-399ea9e2e55f // indirect
+	github.com/dchest/siphash v1.2.1
 	github.com/dgrijalva/jwt-go v3.2.0+incompatible
 	github.com/djherbis/atime v1.0.0
+	github.com/dswarbrick/smart v0.0.0-20190505152634-909a45200d6d
 	github.com/dustin/go-humanize v1.0.0
-	github.com/eapache/go-xerial-snappy v0.0.0-20180814174437-776d5712da21 // indirect
-	github.com/eapache/queue v1.1.0 // indirect
-	github.com/eclipse/paho.mqtt.golang v1.1.2-0.20190322152051-20337d8c3947
+	github.com/eclipse/paho.mqtt.golang v1.2.0
 	github.com/elazarl/go-bindata-assetfs v1.0.0
 	github.com/fatih/color v1.7.0
 	github.com/fatih/structs v1.1.0
 	github.com/go-ole/go-ole v1.2.4 // indirect
-	github.com/go-sql-driver/mysql v1.4.1
-	github.com/golang/groupcache v0.0.0-20191002201903-404acd9df4cc // indirect
+	github.com/go-sql-driver/mysql v1.5.0
 	github.com/gomodule/redigo v2.0.0+incompatible
-	github.com/gopherjs/gopherjs v0.0.0-20190328170749-bb2674552d8f // indirect
-	github.com/gorilla/handlers v1.4.0
-	github.com/gorilla/mux v1.7.0
-	github.com/gorilla/rpc v1.2.0+incompatible
-	github.com/grpc-ecosystem/go-grpc-middleware v1.1.0 // indirect
-	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0 // indirect
-	github.com/grpc-ecosystem/grpc-gateway v1.11.3 // indirect
-	github.com/hashicorp/go-retryablehttp v0.6.2 // indirect
-	github.com/hashicorp/vault v1.1.0
-	github.com/inconshreveable/go-update v0.0.0-20160112193335-8152e7eb6ccf
-	github.com/jonboulle/clockwork v0.1.0 // indirect
-	github.com/json-iterator/go v1.1.7
-	github.com/klauspost/compress v1.8.3
+	github.com/google/uuid v1.1.1
+	github.com/gorilla/handlers v1.4.2
+	github.com/gorilla/mux v1.8.0
+	github.com/gorilla/rpc v1.2.0
+	github.com/gorilla/websocket v1.4.2 // indirect
+	github.com/hashicorp/vault/api v1.0.4
+	github.com/json-iterator/go v1.1.10
+	github.com/klauspost/compress v1.10.3
+	github.com/klauspost/cpuid v1.3.1
 	github.com/klauspost/pgzip v1.2.1
-	github.com/klauspost/readahead v1.3.0
-	github.com/klauspost/reedsolomon v1.9.3
-	github.com/kr/pty v1.1.3 // indirect
-	github.com/kurin/blazer v0.5.4-0.20190613185654-cf2f27cc0be3
-	github.com/lib/pq v1.2.0
-	github.com/mattn/go-isatty v0.0.7
-	github.com/mattn/go-runewidth v0.0.4 // indirect
+	github.com/klauspost/readahead v1.3.1
+	github.com/klauspost/reedsolomon v1.9.9
+	github.com/lib/pq v1.8.0
+	github.com/mattn/go-colorable v0.1.4
+	github.com/mattn/go-ieproxy v0.0.1 // indirect
+	github.com/mattn/go-isatty v0.0.8
 	github.com/miekg/dns v1.1.8
-	github.com/minio/cli v1.21.0
-	github.com/minio/dsync/v2 v2.0.0
-	github.com/minio/gokrb5/v7 v7.2.5
-	github.com/minio/hdfs/v3 v3.0.1
+	github.com/minio/cli v1.22.0
 	github.com/minio/highwayhash v1.0.0
-	github.com/minio/lsync v1.0.1
-	github.com/minio/mc v0.0.0-20190924013003-643835013047
-	github.com/minio/minio-go v0.0.0-20190327203652-5325257a208f
-	github.com/minio/minio-go/v6 v6.0.39
-	github.com/minio/parquet-go v0.0.0-20190318185229-9d767baf1679
+	github.com/minio/minio-go/v7 v7.0.6-0.20200929220449-755b5633803a
+	github.com/minio/selfupdate v0.3.1
 	github.com/minio/sha256-simd v0.1.1
+	github.com/minio/simdjson-go v0.1.5
 	github.com/minio/sio v0.2.0
 	github.com/mitchellh/go-homedir v1.1.0
-	github.com/mitchellh/mapstructure v1.1.2 // indirect
-	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
-	github.com/modern-go/reflect2 v1.0.1 // indirect
-	github.com/nats-io/nats-streaming-server v0.16.2 // indirect
-	github.com/nats-io/nats.go v1.8.1
-	github.com/nats-io/stan.go v0.5.0
+	github.com/mmcloughlin/avo v0.0.0-20200803215136-443f81d77104 // indirect
+	github.com/montanaflynn/stats v0.5.0
+	github.com/nats-io/nats-server/v2 v2.1.7
+	github.com/nats-io/nats-streaming-server v0.18.0 // indirect
+	github.com/nats-io/nats.go v1.10.0
+	github.com/nats-io/stan.go v0.7.0
 	github.com/ncw/directio v1.0.5
 	github.com/nsqio/go-nsq v1.0.7
-	github.com/pkg/errors v0.8.1
-	github.com/pkg/profile v1.3.0
-	github.com/prometheus/client_golang v0.9.3-0.20190127221311-3c4408c8b829
-	github.com/prometheus/client_model v0.0.0-20190129233127-fd36f4220a90 // indirect
-	github.com/rcrowley/go-metrics v0.0.0-20190826022208-cac0b30c2563 // indirect
+	github.com/philhofer/fwd v1.0.0 // indirect
+	github.com/pierrec/lz4 v2.4.0+incompatible
+	github.com/pkg/errors v0.9.1
+	github.com/prometheus/client_golang v1.0.0
 	github.com/rjeczalik/notify v0.9.2
-	github.com/rs/cors v1.6.0
-	github.com/shirou/gopsutil v2.18.12+incompatible
-	github.com/sirupsen/logrus v1.4.2
-	github.com/skyrings/skyring-common v0.0.0-20160929130248-d1c0bb1cbd5e
-	github.com/smartystreets/assertions v0.0.0-20190401211740-f487f9de1cd3 // indirect
-	github.com/soheilhy/cmux v0.1.4 // indirect
-	github.com/streadway/amqp v0.0.0-20190402114354-16ed540749f6
-	github.com/tidwall/gjson v1.2.1
-	github.com/tmc/grpc-websocket-proxy v0.0.0-20190109142713-0ad062ec5ee5 // indirect
+	github.com/rs/cors v1.7.0
+	github.com/secure-io/sio-go v0.3.0
+	github.com/shirou/gopsutil v2.20.3-0.20200314133625-53cec6b37e6a+incompatible
+	github.com/spaolacci/murmur3 v1.1.0 // indirect
+	github.com/streadway/amqp v0.0.0-20190404075320-75d898a42a94
+	github.com/tidwall/gjson v1.3.5
+	github.com/tidwall/sjson v1.0.4
+	github.com/tinylib/msgp v1.1.2
 	github.com/valyala/tcplisten v0.0.0-20161114210144-ceec8f93295a
-	github.com/xiang90/probing v0.0.0-20190116061207-43a291ad63a2 // indirect
-	go.uber.org/atomic v1.4.0
-	golang.org/x/crypto v0.0.0-20190923035154-9ee001bba392
-	golang.org/x/net v0.0.0-20190923162816-aa69164e4478 // indirect
-	golang.org/x/sys v0.0.0-20190922100055-0a153f010e69
-	golang.org/x/time v0.0.0-20190308202827-9d24e82272b4 // indirect
-	google.golang.org/api v0.7.0
-	gopkg.in/Shopify/sarama.v1 v1.20.0
-	gopkg.in/asn1-ber.v1 v1.0.0-20181015200546-f715ec2f112d // indirect
-	gopkg.in/cheggaaa/pb.v1 v1.0.28 // indirect
-	gopkg.in/ini.v1 v1.48.0 // indirect
+	github.com/willf/bitset v1.1.11 // indirect
+	github.com/willf/bloom v2.0.3+incompatible
+	github.com/xdg/scram v0.0.0-20180814205039-7eeb5667e42c
+	go.etcd.io/etcd/v3 v3.3.0-rc.0.0.20200707003333-58bb8ae09f8e
+	golang.org/x/crypto v0.0.0-20200820211705-5c72a883971a
+	golang.org/x/net v0.0.0-20200904194848-62affa334b73
+	golang.org/x/sys v0.0.0-20200915084602-288bc346aa39
+	golang.org/x/tools v0.0.0-20200929223013-bf155c11ec6f // indirect
+	google.golang.org/api v0.5.0
+	gopkg.in/jcmturner/gokrb5.v7 v7.3.0
 	gopkg.in/ldap.v3 v3.0.3
-	gopkg.in/olivere/elastic.v5 v5.0.80
-	gopkg.in/yaml.v2 v2.2.2
+	gopkg.in/olivere/elastic.v5 v5.0.86
+	gopkg.in/yaml.v2 v2.2.8
 )
-
-// Added for go1.13 migration https://github.com/golang/go/issues/32805
-replace github.com/gorilla/rpc v1.2.0+incompatible => github.com/gorilla/rpc v1.2.0
-
-// Allow this for offline builds
-replace github.com/eapache/go-xerial-snappy => github.com/eapache/go-xerial-snappy v0.0.0-20180814174437-776d5712da21
-
-replace github.com/eapache/queue => github.com/eapache/queue v1.1.0
-
-replace github.com/mattn/go-runewidth => github.com/mattn/go-runewidth v0.0.4
-
-replace github.com/mitchellh/mapstructure => github.com/mitchellh/mapstructure v1.1.2

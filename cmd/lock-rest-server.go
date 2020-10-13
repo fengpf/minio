@@ -17,27 +17,25 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"math/rand"
 	"net/http"
+	"path"
+	"sort"
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/minio/dsync/v2"
-	"github.com/minio/minio/cmd/logger"
-	xnet "github.com/minio/minio/pkg/net"
+	"github.com/minio/minio/pkg/dsync"
 )
 
 const (
-	// Lock rpc server endpoint.
-	lockServiceSubPath = "/lock"
-
 	// Lock maintenance interval.
-	lockMaintenanceInterval = 1 * time.Minute
+	lockMaintenanceInterval = 30 * time.Second
 
 	// Lock validity check interval.
-	lockValidityCheckInterval = 2 * time.Minute
+	lockValidityCheckInterval = 30 * time.Second
 )
 
 // To abstract a node over network.
@@ -52,6 +50,11 @@ func (l *lockRESTServer) writeErrorResponse(w http.ResponseWriter, err error) {
 
 // IsValid - To authenticate and verify the time difference.
 func (l *lockRESTServer) IsValid(w http.ResponseWriter, r *http.Request) bool {
+	if l.ll == nil {
+		l.writeErrorResponse(w, errLockNotInitialized)
+		return false
+	}
+
 	if err := storageServerRequestValidate(r); err != nil {
 		l.writeErrorResponse(w, err)
 		return false
@@ -59,14 +62,31 @@ func (l *lockRESTServer) IsValid(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-func getLockArgs(r *http.Request) dsync.LockArgs {
-	return dsync.LockArgs{
-		UID:             r.URL.Query().Get(lockRESTUID),
-		Source:          r.URL.Query().Get(lockRESTSource),
-		Resource:        r.URL.Query().Get(lockRESTResource),
-		ServerAddr:      r.URL.Query().Get(lockRESTServerAddr),
-		ServiceEndpoint: r.URL.Query().Get(lockRESTServerEndpoint),
+func getLockArgs(r *http.Request) (args dsync.LockArgs, err error) {
+	args = dsync.LockArgs{
+		Owner:  r.URL.Query().Get(lockRESTOwner),
+		UID:    r.URL.Query().Get(lockRESTUID),
+		Source: r.URL.Query().Get(lockRESTSource),
 	}
+
+	var resources []string
+	bio := bufio.NewScanner(r.Body)
+	for bio.Scan() {
+		resources = append(resources, bio.Text())
+	}
+
+	if err := bio.Err(); err != nil {
+		return args, err
+	}
+
+	sort.Strings(resources)
+	args.Resources = resources
+	return args, nil
+}
+
+// HealthHandler returns success if request is authenticated.
+func (l *lockRESTServer) HealthHandler(w http.ResponseWriter, r *http.Request) {
+	l.IsValid(w, r)
 }
 
 // LockHandler - Acquires a lock.
@@ -76,7 +96,13 @@ func (l *lockRESTServer) LockHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	success, err := l.ll.Lock(getLockArgs(r))
+	args, err := getLockArgs(r)
+	if err != nil {
+		l.writeErrorResponse(w, err)
+		return
+	}
+
+	success, err := l.ll.Lock(r.Context(), args)
 	if err == nil && !success {
 		err = errLockConflict
 	}
@@ -93,7 +119,13 @@ func (l *lockRESTServer) UnlockHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := l.ll.Unlock(getLockArgs(r))
+	args, err := getLockArgs(r)
+	if err != nil {
+		l.writeErrorResponse(w, err)
+		return
+	}
+
+	_, err = l.ll.Unlock(args)
 	// Ignore the Unlock() "reply" return value because if err == nil, "reply" is always true
 	// Consequently, if err != nil, reply is always false
 	if err != nil {
@@ -109,7 +141,13 @@ func (l *lockRESTServer) RLockHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	success, err := l.ll.RLock(getLockArgs(r))
+	args, err := getLockArgs(r)
+	if err != nil {
+		l.writeErrorResponse(w, err)
+		return
+	}
+
+	success, err := l.ll.RLock(r.Context(), args)
 	if err == nil && !success {
 		err = errLockConflict
 	}
@@ -126,25 +164,15 @@ func (l *lockRESTServer) RUnlockHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Ignore the RUnlock() "reply" return value because if err == nil, "reply" is always true.
-	// Consequently, if err != nil, reply is always false
-	_, err := l.ll.RUnlock(getLockArgs(r))
+	args, err := getLockArgs(r)
 	if err != nil {
 		l.writeErrorResponse(w, err)
 		return
 	}
-}
 
-// ForceUnlockHandler - force releases the acquired lock.
-func (l *lockRESTServer) ForceUnlockHandler(w http.ResponseWriter, r *http.Request) {
-	if !l.IsValid(w, r) {
-		l.writeErrorResponse(w, errors.New("Invalid request"))
-		return
-	}
-
-	// Ignore the ForceUnlock() "reply" return value because if err == nil, "reply" is always true
+	// Ignore the RUnlock() "reply" return value because if err == nil, "reply" is always true.
 	// Consequently, if err != nil, reply is always false
-	if _, err := l.ll.ForceUnlock(getLockArgs(r)); err != nil {
+	if _, err = l.ll.RUnlock(args); err != nil {
 		l.writeErrorResponse(w, err)
 		return
 	}
@@ -157,20 +185,52 @@ func (l *lockRESTServer) ExpiredHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	lockArgs := getLockArgs(r)
+	args, err := getLockArgs(r)
+	if err != nil {
+		l.writeErrorResponse(w, err)
+		return
+	}
 
-	l.ll.mutex.Lock()
-	defer l.ll.mutex.Unlock()
-	// Lock found, proceed to verify if belongs to given uid.
-	if lri, ok := l.ll.lockMap[lockArgs.Resource]; ok {
-		// Check whether uid is still active
-		for _, entry := range lri {
-			if entry.UID == lockArgs.UID {
-				l.writeErrorResponse(w, errLockNotExpired)
-				return
+	expired, err := l.ll.Expired(r.Context(), args)
+	if err != nil {
+		l.writeErrorResponse(w, err)
+		return
+	}
+	if !expired {
+		l.writeErrorResponse(w, errLockNotExpired)
+		return
+	}
+}
+
+// nameLockRequesterInfoPair is a helper type for lock maintenance
+type nameLockRequesterInfoPair struct {
+	name string
+	lri  lockRequesterInfo
+}
+
+// getLongLivedLocks returns locks that are older than a certain time and
+// have not been 'checked' for validity too soon enough
+func getLongLivedLocks(interval time.Duration) map[Endpoint][]nameLockRequesterInfoPair {
+	nlripMap := make(map[Endpoint][]nameLockRequesterInfoPair)
+	for endpoint, locker := range globalLockServers {
+		rslt := []nameLockRequesterInfoPair{}
+		locker.mutex.Lock()
+		for name, lriArray := range locker.lockMap {
+			for idx := range lriArray {
+				// Check whether enough time has gone by since last check
+				if time.Since(lriArray[idx].TimeLastCheck) >= interval {
+					rslt = append(rslt, nameLockRequesterInfoPair{
+						name: name,
+						lri:  lriArray[idx],
+					})
+					lriArray[idx].TimeLastCheck = UTCNow()
+				}
 			}
 		}
+		nlripMap[endpoint] = rslt
+		locker.mutex.Unlock()
 	}
+	return nlripMap
 }
 
 // lockMaintenance loops over locks that have been active for some time and checks back
@@ -181,82 +241,155 @@ func (l *lockRESTServer) ExpiredHandler(w http.ResponseWriter, r *http.Request) 
 // - some network error (and server is up normally)
 //
 // We will ignore the error, and we will retry later to get a resolve on this lock
-func (l *lockRESTServer) lockMaintenance(interval time.Duration) {
-	l.ll.mutex.Lock()
-	// Get list of long lived locks to check for staleness.
-	nlripLongLived := getLongLivedLocks(l.ll.lockMap, interval)
-	l.ll.mutex.Unlock()
+func lockMaintenance(ctx context.Context, interval time.Duration) error {
+	objAPI := newObjectLayerFn()
+	if objAPI == nil {
+		return nil
+	}
+
+	z, ok := objAPI.(*erasureZones)
+	if !ok {
+		return nil
+	}
+
+	type nlock struct {
+		locks  int
+		writer bool
+	}
+
+	updateNlocks := func(nlripsMap map[string]nlock, name string, writer bool) {
+		nlk, ok := nlripsMap[name]
+		if !ok {
+			nlripsMap[name] = nlock{
+				locks:  1,
+				writer: writer,
+			}
+		} else {
+			nlk.locks++
+			nlripsMap[name] = nlk
+		}
+	}
+
+	allLockersFn := z.GetAllLockers
 
 	// Validate if long lived locks are indeed clean.
-	for _, nlrip := range nlripLongLived {
-		// Initialize client based on the long live locks.
-		host, err := xnet.ParseHost(nlrip.lri.Node)
-		if err != nil {
-			logger.LogIf(context.Background(), err)
-			continue
-		}
-		c := newlockRESTClient(host)
-		if !c.IsOnline() {
-			continue
-		}
+	// Get list of long lived locks to check for staleness.
+	for lendpoint, nlrips := range getLongLivedLocks(interval) {
+		nlripsMap := make(map[string]nlock, len(nlrips))
+		for _, nlrip := range nlrips {
+			// Locks are only held on first zone, make sure that
+			// we only look for ownership of locks from endpoints
+			// on first zone.
+			for _, c := range allLockersFn() {
+				if !c.IsOnline() || c == nil {
+					updateNlocks(nlripsMap, nlrip.name, nlrip.lri.Writer)
+					continue
+				}
 
-		// Call back to original server verify whether the lock is still active (based on name & uid)
-		expired, err := c.Expired(dsync.LockArgs{
-			UID:      nlrip.lri.UID,
-			Resource: nlrip.name,
-		})
+				ctx, cancel := context.WithTimeout(GlobalContext, 5*time.Second)
 
-		if err != nil {
-			continue
+				// Call back to original server verify whether the lock is
+				// still active (based on name & uid)
+				expired, err := c.Expired(ctx, dsync.LockArgs{
+					Owner:     nlrip.lri.Owner,
+					UID:       nlrip.lri.UID,
+					Resources: []string{nlrip.name},
+				})
+				cancel()
+				if err != nil {
+					updateNlocks(nlripsMap, nlrip.name, nlrip.lri.Writer)
+					continue
+				}
+
+				if !expired {
+					updateNlocks(nlripsMap, nlrip.name, nlrip.lri.Writer)
+				}
+			}
+
+			// Read locks we assume quorum for be N/2 success
+			quorum := getReadQuorum(objAPI.SetDriveCount())
+			if nlrip.lri.Writer {
+				quorum = getWriteQuorum(objAPI.SetDriveCount())
+			}
+
+			// less than the quorum, we have locks expired.
+			if nlripsMap[nlrip.name].locks < quorum {
+				// The lock is no longer active at server that originated
+				// the lock, attempt to remove the lock.
+				globalLockServers[lendpoint].mutex.Lock()
+				// Purge the stale entry if it exists.
+				globalLockServers[lendpoint].removeEntryIfExists(nlrip)
+				globalLockServers[lendpoint].mutex.Unlock()
+			}
+
 		}
-
-		// For successful response, verify if lock was indeed active or stale.
-		if expired {
-			// The lock is no longer active at server that originated
-			// the lock, attempt to remove the lock.
-			l.ll.mutex.Lock()
-			l.ll.removeEntryIfExists(nlrip) // Purge the stale entry if it exists.
-			l.ll.mutex.Unlock()
-		}
-
-		// Close the connection regardless of the call response.
-		c.Close()
 	}
+
+	return nil
 }
 
 // Start lock maintenance from all lock servers.
-func startLockMaintenance(lkSrv *lockRESTServer) {
+func startLockMaintenance(ctx context.Context) {
+	// Wait until the object API is ready
+	// no need to start the lock maintenance
+	// if ObjectAPI is not initialized.
+	for {
+		objAPI := newObjectLayerFn()
+		if objAPI == nil {
+			time.Sleep(time.Second)
+			continue
+		}
+		break
+	}
+
 	// Initialize a new ticker with a minute between each ticks.
 	ticker := time.NewTicker(lockMaintenanceInterval)
 	// Stop the timer upon service closure and cleanup the go-routine.
 	defer ticker.Stop()
 
-	// Start with random sleep time, so as to avoid "synchronous checks" between servers
-	time.Sleep(time.Duration(rand.Float64() * float64(lockMaintenanceInterval)))
+	r := rand.New(rand.NewSource(UTCNow().UnixNano()))
 	for {
 		// Verifies every minute for locks held more than 2 minutes.
 		select {
-		case <-GlobalServiceDoneCh:
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			lkSrv.lockMaintenance(lockValidityCheckInterval)
+			// Start with random sleep time, so as to avoid
+			// "synchronous checks" between servers
+			duration := time.Duration(r.Float64() * float64(lockMaintenanceInterval))
+			time.Sleep(duration)
+			if err := lockMaintenance(ctx, lockValidityCheckInterval); err != nil {
+				// Sleep right after an error.
+				duration := time.Duration(r.Float64() * float64(lockMaintenanceInterval))
+				time.Sleep(duration)
+			}
 		}
 	}
 }
 
 // registerLockRESTHandlers - register lock rest router.
-func registerLockRESTHandlers(router *mux.Router) {
-	subrouter := router.PathPrefix(lockRESTPath).Subrouter()
-	queries := restQueries(lockRESTUID, lockRESTSource, lockRESTResource, lockRESTServerAddr, lockRESTServerEndpoint)
-	subrouter.Methods(http.MethodPost).Path(SlashSeparator + lockRESTMethodLock).HandlerFunc(httpTraceHdrs(globalLockServer.LockHandler)).Queries(queries...)
-	subrouter.Methods(http.MethodPost).Path(SlashSeparator + lockRESTMethodRLock).HandlerFunc(httpTraceHdrs(globalLockServer.RLockHandler)).Queries(queries...)
-	subrouter.Methods(http.MethodPost).Path(SlashSeparator + lockRESTMethodUnlock).HandlerFunc(httpTraceHdrs(globalLockServer.UnlockHandler)).Queries(queries...)
-	subrouter.Methods(http.MethodPost).Path(SlashSeparator + lockRESTMethodRUnlock).HandlerFunc(httpTraceHdrs(globalLockServer.RUnlockHandler)).Queries(queries...)
-	subrouter.Methods(http.MethodPost).Path(SlashSeparator + lockRESTMethodForceUnlock).HandlerFunc(httpTraceHdrs(globalLockServer.ForceUnlockHandler)).Queries(queries...)
-	subrouter.Methods(http.MethodPost).Path(SlashSeparator + lockRESTMethodExpired).HandlerFunc(httpTraceAll(globalLockServer.ExpiredHandler)).Queries(queries...)
+func registerLockRESTHandlers(router *mux.Router, endpointZones EndpointZones) {
+	for _, ep := range endpointZones {
+		for _, endpoint := range ep.Endpoints {
+			if !endpoint.IsLocal {
+				continue
+			}
 
-	router.MethodNotAllowedHandler = http.HandlerFunc(httpTraceAll(versionMismatchHandler))
+			lockServer := &lockRESTServer{
+				ll: newLocker(endpoint),
+			}
 
-	// Start lock maintenance from all lock servers.
-	go startLockMaintenance(globalLockServer)
+			subrouter := router.PathPrefix(path.Join(lockRESTPrefix, endpoint.Path)).Subrouter()
+			subrouter.Methods(http.MethodPost).Path(lockRESTVersionPrefix + lockRESTMethodHealth).HandlerFunc(httpTraceHdrs(lockServer.HealthHandler))
+			subrouter.Methods(http.MethodPost).Path(lockRESTVersionPrefix + lockRESTMethodLock).HandlerFunc(httpTraceHdrs(lockServer.LockHandler))
+			subrouter.Methods(http.MethodPost).Path(lockRESTVersionPrefix + lockRESTMethodRLock).HandlerFunc(httpTraceHdrs(lockServer.RLockHandler))
+			subrouter.Methods(http.MethodPost).Path(lockRESTVersionPrefix + lockRESTMethodUnlock).HandlerFunc(httpTraceHdrs(lockServer.UnlockHandler))
+			subrouter.Methods(http.MethodPost).Path(lockRESTVersionPrefix + lockRESTMethodRUnlock).HandlerFunc(httpTraceHdrs(lockServer.RUnlockHandler))
+			subrouter.Methods(http.MethodPost).Path(lockRESTVersionPrefix + lockRESTMethodExpired).HandlerFunc(httpTraceAll(lockServer.ExpiredHandler))
+
+			globalLockServers[endpoint] = lockServer.ll
+		}
+	}
+
+	go startLockMaintenance(GlobalContext)
 }

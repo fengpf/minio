@@ -17,30 +17,23 @@
 package madmin
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
-
-	"github.com/minio/minio/cmd/logger/message/log"
 )
 
 // LogInfo holds console log messages
 type LogInfo struct {
-	log.Entry
+	logEntry
 	ConsoleMsg string
 	NodeName   string `json:"node"`
 	Err        error  `json:"-"`
 }
 
-// SendLog returns true if log pertains to node specified in args.
-func (l LogInfo) SendLog(node string) bool {
-	return node == "" || strings.EqualFold(node, l.NodeName)
-}
-
 // GetLogs - listen on console log messages.
-func (adm AdminClient) GetLogs(node string, lineCnt int, doneCh <-chan struct{}) <-chan LogInfo {
+func (adm AdminClient) GetLogs(ctx context.Context, node string, lineCnt int, logKind string) <-chan LogInfo {
 	logCh := make(chan LogInfo, 1)
 
 	// Only success, start a routine to start reading line by line.
@@ -49,13 +42,14 @@ func (adm AdminClient) GetLogs(node string, lineCnt int, doneCh <-chan struct{})
 		urlValues := make(url.Values)
 		urlValues.Set("node", node)
 		urlValues.Set("limit", strconv.Itoa(lineCnt))
+		urlValues.Set("logType", logKind)
 		for {
 			reqData := requestData{
-				relPath:     "/v1/log",
+				relPath:     adminAPIPrefix + "/log",
 				queryValues: urlValues,
 			}
 			// Execute GET to call log handler
-			resp, err := adm.executeMethod("GET", reqData)
+			resp, err := adm.executeMethod(ctx, http.MethodGet, reqData)
 			if err != nil {
 				closeResponse(resp)
 				return
@@ -72,7 +66,7 @@ func (adm AdminClient) GetLogs(node string, lineCnt int, doneCh <-chan struct{})
 					break
 				}
 				select {
-				case <-doneCh:
+				case <-ctx.Done():
 					return
 				case logCh <- info:
 				}

@@ -83,14 +83,15 @@ func getOpName(name string) (op string) {
 	op = strings.TrimPrefix(name, "github.com/minio/minio/cmd.")
 	op = strings.TrimSuffix(op, "Handler-fm")
 	op = strings.Replace(op, "objectAPIHandlers", "s3", 1)
-	op = strings.Replace(op, "webAPIHandlers", "s3", 1)
+	op = strings.Replace(op, "webAPIHandlers", "webui", 1)
 	op = strings.Replace(op, "adminAPIHandlers", "admin", 1)
 	op = strings.Replace(op, "(*storageRESTServer)", "internal", 1)
 	op = strings.Replace(op, "(*peerRESTServer)", "internal", 1)
 	op = strings.Replace(op, "(*lockRESTServer)", "internal", 1)
-	op = strings.Replace(op, "stsAPIHandlers", "sts", 1)
+	op = strings.Replace(op, "(*stsAPIHandlers)", "sts", 1)
 	op = strings.Replace(op, "LivenessCheckHandler", "healthcheck", 1)
 	op = strings.Replace(op, "ReadinessCheckHandler", "healthcheck", 1)
+	op = strings.Replace(op, "-fm", "", 1)
 	return op
 }
 
@@ -103,9 +104,8 @@ func Trace(f http.HandlerFunc, logBody bool, w http.ResponseWriter, r *http.Requ
 	reqHeaders.Set("Host", r.Host)
 	if len(r.TransferEncoding) == 0 {
 		reqHeaders.Set("Content-Length", strconv.Itoa(int(r.ContentLength)))
-	}
-	for _, enc := range r.TransferEncoding {
-		reqHeaders.Add("Transfer-Encoding", enc)
+	} else {
+		reqHeaders.Set("Transfer-Encoding", strings.Join(r.TransferEncoding, ","))
 	}
 
 	var reqBodyRecorder *recordRequest
@@ -113,7 +113,7 @@ func Trace(f http.HandlerFunc, logBody bool, w http.ResponseWriter, r *http.Requ
 	reqBodyRecorder = &recordRequest{Reader: r.Body, logBody: logBody, headers: reqHeaders}
 	r.Body = ioutil.NopCloser(reqBodyRecorder)
 	t.NodeName = r.Host
-	if globalIsDistXL {
+	if globalIsDistErasure {
 		t.NodeName = GetLocalPeer(globalEndpoints)
 	}
 	// strip port from the host address
@@ -123,15 +123,19 @@ func Trace(f http.HandlerFunc, logBody bool, w http.ResponseWriter, r *http.Requ
 
 	rq := trace.RequestInfo{
 		Time:     time.Now().UTC(),
+		Proto:    r.Proto,
 		Method:   r.Method,
 		Path:     r.URL.Path,
 		RawQuery: r.URL.RawQuery,
 		Client:   handlers.GetSourceIP(r),
 		Headers:  reqHeaders,
-		Body:     reqBodyRecorder.Data(),
 	}
-	rw, _ := w.(*logger.ResponseWriter)
-	rw.LogBody = logBody
+
+	rw := logger.NewResponseWriter(w)
+	rw.LogErrBody = true
+	rw.LogAllBody = logBody
+
+	// Execute call.
 	f(rw, r)
 
 	rs := trace.ResponseInfo{
@@ -140,6 +144,9 @@ func Trace(f http.HandlerFunc, logBody bool, w http.ResponseWriter, r *http.Requ
 		StatusCode: rw.StatusCode,
 		Body:       rw.Body(),
 	}
+
+	// Transfer request body
+	rq.Body = reqBodyRecorder.Data()
 
 	if rs.StatusCode == 0 {
 		rs.StatusCode = http.StatusOK

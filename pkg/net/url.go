@@ -17,14 +17,14 @@
 package net
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
-	"net/http"
 	"net/url"
 	"path"
 	"strings"
-	"time"
 )
 
 // URL - improved JSON friendly url.URL.
@@ -82,25 +82,19 @@ func (u *URL) UnmarshalJSON(data []byte) (err error) {
 	return nil
 }
 
-// DialHTTP - dials the url to check the connection.
-func (u URL) DialHTTP() error {
-	var client = &http.Client{
-		Transport: &http.Transport{
-			DialContext: (&net.Dialer{
-				Timeout: 2 * time.Second,
-			}).DialContext,
-		},
-	}
-	req, err := http.NewRequest("POST", u.String(), nil)
+// ParseHTTPURL - parses a string into HTTP URL, string is
+// expected to be of form http:// or https://
+func ParseHTTPURL(s string) (u *URL, err error) {
+	u, err = ParseURL(s)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
+	switch u.Scheme {
+	default:
+		return nil, fmt.Errorf("unexpected scheme found %s", u.Scheme)
+	case "http", "https":
+		return u, nil
 	}
-	resp.Body.Close()
-	return nil
 }
 
 // ParseURL - parses string into URL.
@@ -110,12 +104,23 @@ func ParseURL(s string) (u *URL, err error) {
 		return nil, err
 	}
 
-	if uu.Host == "" {
+	if uu.Hostname() == "" {
 		if uu.Scheme != "" {
 			return nil, errors.New("scheme appears with empty host")
 		}
-	} else if _, err = ParseHost(uu.Host); err != nil {
-		return nil, err
+	} else {
+		portStr := uu.Port()
+		if portStr == "" {
+			switch uu.Scheme {
+			case "http":
+				portStr = "80"
+			case "https":
+				portStr = "443"
+			}
+		}
+		if _, err = ParseHost(net.JoinHostPort(uu.Hostname(), portStr)); err != nil {
+			return nil, err
+		}
 	}
 
 	// Clean path in the URL.
@@ -140,21 +145,27 @@ func IsNetworkOrHostDown(err error) bool {
 	if err == nil {
 		return false
 	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+
 	// We need to figure if the error either a timeout
 	// or a non-temporary error.
 	e, ok := err.(net.Error)
 	if ok {
-		urlErr, ok := e.(*url.Error)
-		if ok {
+		if urlErr, ok := e.(*url.Error); ok {
 			switch urlErr.Err.(type) {
 			case *net.DNSError, *net.OpError, net.UnknownNetworkError:
 				return true
 			}
 		}
+
 		if e.Timeout() {
 			return true
 		}
+
 	}
+
 	ok = false
 	// Fallback to other mechanisms.
 	if strings.Contains(err.Error(), "Connection closed by foreign host") {

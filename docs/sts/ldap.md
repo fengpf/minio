@@ -1,4 +1,4 @@
-# MinIO AD/LDAP Integration [![Slack](https://slack.min.io/slack?type=svg)](https://slack.min.io)
+# AssumeRoleWithLDAPIdentity [![Slack](https://slack.min.io/slack?type=svg)](https://slack.min.io)
 
 **Table of Contents**
 
@@ -14,10 +14,9 @@
     - [Policy](#policy)
     - [Response Elements](#response-elements)
     - [Errors](#errors)
-- [Sample Request](#sample-request)
-- [Sample Response](#sample-response)
-- [Testing](#testing)
-
+- [Sample `POST` Request](#sample-post-request)
+- [Using LDAP STS API](#using-ldap-sts-api)
+- [Explore Further](#explore-further)
 
 ## Introduction
 
@@ -38,42 +37,46 @@ LDAP configuration is designed to be simple for the MinIO administrator. The ful
 
 MinIO can be configured to find the groups of a user from AD/LDAP by specifying the **MINIO_IDENTITY_LDAP_GROUP_SEARCH_FILTER** and **MINIO_IDENTITY_LDAP_GROUP_NAME_ATTRIBUTE** environment variables. When a user logs in via the STS API, the MinIO server queries the AD/LDAP server with the given search filter and extracts the given attribute from the search results. These values represent the groups that the user is a member of. On each access MinIO applies the IAM policies attached to these groups in MinIO.
 
+MinIO sends LDAP credentials to LDAP server for validation. So we _strongly recommend_ to use MinIO with AD/LDAP server over TLS or StartTLS _only_. Using plain-text connection between MinIO and LDAP server means _credentials can be compromised_ by anyone listening to network traffic.
+
 LDAP is configured via the following environment variables:
 
-| Variable                                     | Required?                 | Purpose                                                |
-|----------------------------------------------|---------------------------|--------------------------------------------------------|
-| **MINIO_IDENTITY_LDAP_SERVER_ADDR**          | **YES**                   | AD/LDAP server address                                 |
-| **MINIO_IDENTITY_LDAP_USERNAME_FORMAT**      | **YES**                   | Format of full username DN                             |
-| **MINIO_IDENTITY_LDAP_GROUP_SEARCH_BASE_DN** | **NO**                    | Base DN in AD/LDAP hierarchy to use in search requests |
-| **MINIO_IDENTITY_LDAP_GROUP_SEARCH_FILTER**  | **NO**                    | Search filter to find groups of a user                 |
-| **MINIO_IDENTITY_LDAP_GROUP_NAME_ATTRIBUTE** | **NO**                    | Attribute of search results to use as group name       |
-| **MINIO_IDENTITY_LDAP_STS_EXPIRY**           | **NO** (default: "1h")    | STS credentials validity duration                      |
+```
+$ mc admin config set myminio/ identity_ldap  --env
+KEY:
+identity_ldap  enable LDAP SSO support
 
-Please note that MinIO will only access the AD/LDAP server over TLS. If a self-signed certificate is being used, the certificate can be added to MinIO's certificates directory, so it can be trusted by the server.
+ARGS:
+MINIO_IDENTITY_LDAP_SERVER_ADDR*             (address)   AD/LDAP server address e.g. "myldapserver.com:636"
+MINIO_IDENTITY_LDAP_USERNAME_FORMAT*         (list)      ";" separated list of username bind DNs e.g. "uid=%s,cn=accounts,dc=myldapserver,dc=com"
+MINIO_IDENTITY_LDAP_USERNAME_SEARCH_FILTER*  (string)    user search filter, for example "(cn=%s)" or "(sAMAccountName=%s)" or "(uid=%s)"
+MINIO_IDENTITY_LDAP_GROUP_SEARCH_FILTER*     (string)    search filter for groups e.g. "(&(objectclass=groupOfNames)(memberUid=%s))"
+MINIO_IDENTITY_LDAP_GROUP_SEARCH_BASE_DN*    (list)      ";" separated list of group search base DNs e.g. "dc=myldapserver,dc=com"
+MINIO_IDENTITY_LDAP_USERNAME_SEARCH_BASE_DN  (list)      ";" separated list of username search DNs
+MINIO_IDENTITY_LDAP_GROUP_NAME_ATTRIBUTE     (string)    search attribute for group name e.g. "cn"
+MINIO_IDENTITY_LDAP_STS_EXPIRY               (duration)  temporary credentials validity duration in s,m,h,d. Default is "1h"
+MINIO_IDENTITY_LDAP_TLS_SKIP_VERIFY          (on|off)    trust server TLS without verification, defaults to "off" (verify)
+MINIO_IDENTITY_LDAP_SERVER_STARTTLS          (on|off)    use StartTLS instead of TLS
+MINIO_IDENTITY_LDAP_SERVER_INSECURE          (on|off)    allow plain text connection to AD/LDAP server, defaults to "off"
+MINIO_IDENTITY_LDAP_COMMENT                  (sentence)  optionally add a comment to this setting
+```
 
-An example setup for development or experimentation:
+MinIO sends LDAP credentials to LDAP server for validation. So we _strongly recommend_ to use MinIO with AD/LDAP server over TLS or StartTLS _only_. Using plain-text connection between MinIO and LDAP server means _credentials can be compromised_ by anyone listening to network traffic.
 
-``` shell
+If a self-signed certificate is being used, the certificate can be added to MinIO's certificates directory, so it can be trusted by the server. An example setup for development or experimentation:
+
+```shell
 export MINIO_IDENTITY_LDAP_SERVER_ADDR=myldapserver.com:636
-export MINIO_IDENTITY_LDAP_USERNAME_FORMAT="uid=${username},cn=accounts,dc=myldapserver,dc=com"
+export MINIO_IDENTITY_LDAP_USERNAME_FORMAT="uid=%s,cn=accounts,dc=myldapserver,dc=com"
 export MINIO_IDENTITY_LDAP_GROUP_SEARCH_BASE_DN="dc=myldapserver,dc=com"
-export MINIO_IDENTITY_LDAP_GROUP_SEARCH_FILTER="(&(objectclass=groupOfNames)(member=${usernamedn}))"
-export MINIO_IDENTITY_LDAP_GROUP_NAME_ATTRIBUTE="cn"
-export MINIO_IDENTITY_LDAP_STS_EXPIRY=60
+export MINIO_IDENTITY_LDAP_GROUP_SEARCH_FILTER="(&(objectclass=groupOfNames)(memberUid=%s)$)"
+export MINIO_IDENTITY_LDAP_GROUP_NAME_ATTRIBUTE=cn
+export MINIO_IDENTITY_LDAP_STS_EXPIRY=60h
+export MINIO_IDENTITY_LDAP_TLS_SKIP_VERIFY=on
 ```
 
 ### Variable substitution in AD/LDAP configuration strings
-
-In the configuration values described above, some values support runtime substitutions. The substitution syntax is simply `${variable}` - this substring is replaced with the (string) value of `variable`. The following substitutions will be available:
-
-| Variable     | Example Runtime Value                          | Description                                                                                                                                  |
-|--------------|------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
-| *username*   | "james"                                        | The AD/LDAP username of a user.                                                                                                                 |
-| *usernamedn* | "uid=james,cn=accounts,dc=myldapserver,dc=com" | The AD/LDAP username DN of a user. This is constructed from the AD/LDAP user DN format string provided to the server and the actual AD/LDAP username. |
-
-The **MINIO_IDENTITY_LDAP_USERNAME_FORMAT** environment variable supports substitution of the *username* variable only.
-
-The **MINIO_IDENTITY_LDAP_GROUP_SEARCH_FILTER** and **MINIO_IDENTITY_LDAP_GROUP_SEARCH_BASE_DN** environment variables support substitution of the *username* and *usernamedn* variables only.
+`%s` is replaced with *username* automatically for construction bind_dn, search_filter and group_search_filter.
 
 ### Notes on configuring with Microsoft Active Directory (AD)
 
@@ -99,18 +102,19 @@ member: CN=John,CN=Users,DC=minioad,DC=local
 ...
 ```
 
-The lines with "..." represent skipped content not shown here from brevity. Based on the output above, we see that the username format variable looks like `cn=${username},cn=users,dc=minioad,dc=local`.
+The lines with "..." represent skipped content not shown here from brevity. Based on the output above, we see that the username format variable looks like `cn=%s,cn=users,dc=minioad,dc=local`.
 
-The group search filter looks like `(&(objectclass=group)(member=${usernamedn}))` and the group name attribute is clearly `cn`.
+The group search filter looks like `(&(objectclass=group)(member=%s))` and the group name attribute is clearly `cn`.
 
 Thus the key configuration parameters look like:
 
 ```
 MINIO_IDENTITY_LDAP_SERVER_ADDR='my.ldap-active-dir-server.com:636'
-MINIO_IDENTITY_LDAP_USERNAME_FORMAT='cn=${username},cn=users,dc=minioad,dc=local'
+MINIO_IDENTITY_LDAP_USERNAME_FORMAT='cn=%s,ou=Users,ou=BUS1,ou=LOB,dc=somedomain,dc=com'
 MINIO_IDENTITY_LDAP_GROUP_SEARCH_BASE_DN='dc=minioad,dc=local'
-MINIO_IDENTITY_LDAP_GROUP_SEARCH_FILTER='(&(objectclass=group)(member=${usernamedn}))'
+MINIO_IDENTITY_LDAP_GROUP_SEARCH_FILTER='(&(objectclass=group)(member=%s))'
 MINIO_IDENTITY_LDAP_GROUP_NAME_ATTRIBUTE='cn'
+MINIO_IDENTITY_LDAP_TLS_SKIP_VERIFY=on
 ```
 
 ## Managing User/Group Access Policy
@@ -182,7 +186,7 @@ XML response for this API is similar to [AWS STS AssumeRoleWithWebIdentity](http
 ### Errors
 XML error response for this API is similar to [AWS STS AssumeRoleWithWebIdentity](https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html#API_AssumeRoleWithWebIdentity_Errors)
 
-## Sample Request
+## Sample `POST` Request
 ```
 http://minio.cluster:9000?Action=AssumeRoleWithLDAPIdentity&LDAPUsername=foouser&LDAPPassword=foouserpassword&Version=2011-06-15
 ```
@@ -207,14 +211,16 @@ http://minio.cluster:9000?Action=AssumeRoleWithLDAPIdentity&LDAPUsername=foouser
 </AssumeRoleWithLDAPIdentityResponse>
 ```
 
-## Testing
+## Using LDAP STS API
+
+With multiple OU hierarchies for users, and multiple group search base DN's.
 ```
 $ export MINIO_ACCESS_KEY=minio
 $ export MINIO_SECRET_KEY=minio123
 $ export MINIO_IDENTITY_LDAP_SERVER_ADDR='my.ldap-active-dir-server.com:636'
-$ export MINIO_IDENTITY_LDAP_USERNAME_FORMAT='cn=${username},cn=users,dc=minioad,dc=local'
-$ export MINIO_IDENTITY_LDAP_GROUP_SEARCH_BASE_DN='dc=minioad,dc=local'
-$ export MINIO_IDENTITY_LDAP_GROUP_SEARCH_FILTER='(&(objectclass=group)(member=${usernamedn}))'
+$ export MINIO_IDENTITY_LDAP_USERNAME_FORMAT='cn=%s,ou=Users,ou=BUS1,ou=LOB,dc=somedomain,dc=com;cn=%s,ou=Users,ou=BUS2,ou=LOB,dc=somedomain,dc=com'
+$ export MINIO_IDENTITY_LDAP_GROUP_SEARCH_BASE_DN='dc=minioad,dc=local;dc=somedomain,dc=com'
+$ export MINIO_IDENTITY_LDAP_GROUP_SEARCH_FILTER='(&(objectclass=group)(member=%s))'
 $ export MINIO_IDENTITY_LDAP_GROUP_NAME_ATTRIBUTE='cn'
 $ minio server ~/test
 ```
@@ -231,3 +237,9 @@ $ go run ldap.go -u foouser -p foopassword
 }
 ```
 
+## Caveats
+**LDAP STS credentials are not yet supported on MinIO Browser UI, we may add this feature in future releases.**
+
+## Explore Further
+- [MinIO Admin Complete Guide](https://docs.min.io/docs/minio-admin-complete-guide.html)
+- [The MinIO documentation website](https://docs.min.io)

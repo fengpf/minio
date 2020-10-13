@@ -18,16 +18,16 @@ package config
 
 // UI errors
 var (
-	ErrInvalidConfig = newErrFn(
-		"Invalid value found in the configuration file",
-		"Please ensure a valid value in the configuration file",
-		"For more details, refer to https://docs.min.io/docs/minio-server-configuration-guide",
-	)
-
 	ErrInvalidBrowserValue = newErrFn(
 		"Invalid browser value",
 		"Please check the passed value",
 		"Browser can only accept `on` and `off` values. To disable web browser access, set this value to `off`",
+	)
+
+	ErrInvalidFSOSyncValue = newErrFn(
+		"Invalid O_SYNC value",
+		"Please check the passed value",
+		"Can only accept `on` and `off` values. To enable O_SYNC for fs backend, set this value to `on`",
 	)
 
 	ErrInvalidDomainValue = newErrFn(
@@ -39,7 +39,7 @@ var (
 	ErrInvalidErasureSetSize = newErrFn(
 		"Invalid erasure set size",
 		"Please check the passed value",
-		"Erasure set can only accept any of [4, 6, 8, 10, 12, 14, 16] values",
+		"Erasure set can only accept any of [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] values",
 	)
 
 	ErrInvalidWormValue = newErrFn(
@@ -51,25 +51,43 @@ var (
 	ErrInvalidCacheDrivesValue = newErrFn(
 		"Invalid cache drive value",
 		"Please check the value in this ENV variable",
-		"MINIO_CACHE_DRIVES: Mounted drives or directories are delimited by `;`",
+		"MINIO_CACHE_DRIVES: Mounted drives or directories are delimited by `,`",
 	)
 
 	ErrInvalidCacheExcludesValue = newErrFn(
 		"Invalid cache excludes value",
 		"Please check the passed value",
-		"MINIO_CACHE_EXCLUDE: Cache exclusion patterns are delimited by `;`",
+		"MINIO_CACHE_EXCLUDE: Cache exclusion patterns are delimited by `,`",
 	)
 
 	ErrInvalidCacheExpiryValue = newErrFn(
 		"Invalid cache expiry value",
 		"Please check the passed value",
-		"MINIO_CACHE_EXPIRY: Valid cache expiry duration is in days",
+		"MINIO_CACHE_EXPIRY: Valid cache expiry duration must be in days",
 	)
 
-	ErrInvalidCacheMaxUse = newErrFn(
-		"Invalid cache max-use value",
+	ErrInvalidCacheQuota = newErrFn(
+		"Invalid cache quota value",
 		"Please check the passed value",
-		"MINIO_CACHE_MAXUSE: Valid cache max-use value between 0-100",
+		"MINIO_CACHE_QUOTA: Valid cache quota value must be between 0-100",
+	)
+
+	ErrInvalidCacheAfter = newErrFn(
+		"Invalid cache after value",
+		"Please check the passed value",
+		"MINIO_CACHE_AFTER: Valid cache after value must be 0 or greater",
+	)
+
+	ErrInvalidCacheWatermarkLow = newErrFn(
+		"Invalid cache low watermark value",
+		"Please check the passed value",
+		"MINIO_CACHE_WATERMARK_LOW: Valid cache low watermark value must be between 0-100",
+	)
+
+	ErrInvalidCacheWatermarkHigh = newErrFn(
+		"Invalid cache high watermark value",
+		"Please check the passed value",
+		"MINIO_CACHE_WATERMARK_HIGH: Valid cache high watermark value must be between 0-100",
 	)
 
 	ErrInvalidCacheEncryptionKey = newErrFn(
@@ -78,11 +96,34 @@ var (
 		"MINIO_CACHE_ENCRYPTION_MASTER_KEY: For more information, please refer to https://docs.min.io/docs/minio-disk-cache-guide",
 	)
 
+	ErrInvalidCacheRange = newErrFn(
+		"Invalid cache range value",
+		"Please check the passed value",
+		"MINIO_CACHE_RANGE: Valid expected value is `on` or `off`",
+	)
+
+	ErrInvalidRotatingCredentialsBackendEncrypted = newErrFn(
+		"Invalid rotating credentials",
+		"Please set correct rotating credentials in the environment for decryption",
+		`Detected encrypted config backend, correct old access and secret keys should be specified via environment variables MINIO_ACCESS_KEY_OLD and MINIO_SECRET_KEY_OLD to be able to re-encrypt the MinIO config, user IAM and policies with new credentials`,
+	)
+
+	ErrInvalidCredentialsBackendEncrypted = newErrFn(
+		"Invalid credentials",
+		"Please set correct credentials in the environment for decryption",
+		`Detected encrypted config backend, correct access and secret keys should be specified via environment variables MINIO_ACCESS_KEY and MINIO_SECRET_KEY to be able to decrypt the MinIO config, user IAM and policies`,
+	)
+
+	ErrMissingCredentialsBackendEncrypted = newErrFn(
+		"Credentials missing",
+		"Please set your credentials in the environment",
+		`Detected encrypted config backend, access and secret keys should be specified via environment variables MINIO_ACCESS_KEY and MINIO_SECRET_KEY to be able to decrypt the MinIO config, user IAM and policies`,
+	)
+
 	ErrInvalidCredentials = newErrFn(
 		"Invalid credentials",
 		"Please provide correct credentials",
-		`Access key length should be between minimum 3 characters in length.
-Secret key should be in between 8 and 40 characters`,
+		`Access key length should be at least 3, and secret key length at least 8 characters`,
 	)
 
 	ErrEnvCredentialsMissingGateway = newErrFn(
@@ -140,6 +181,12 @@ Example 1:
    $ minio server /data/minio/`,
 	)
 
+	ErrUnsupportedBackend = newErrFn(
+		"Unable to write to the backend",
+		"Please ensure your disk supports O_DIRECT",
+		"",
+	)
+
 	ErrUnableToWriteInBackend = newErrFn(
 		"Unable to write to the backend",
 		"Please ensure MinIO binary has write permissions for the backend",
@@ -156,12 +203,6 @@ Example 1:
 		"Unable to use specified port",
 		"Please ensure MinIO binary has 'cap_net_bind_service=+ep' permissions",
 		`Use 'sudo setcap cap_net_bind_service=+ep /path/to/minio' to provide sufficient permissions`,
-	)
-
-	ErrNoPermissionsToAccessDirFiles = newErrFn(
-		"Missing permissions to access the specified path",
-		"Please ensure the specified path can be accessed",
-		"",
 	)
 
 	ErrSSLUnexpectedError = newErrFn(
@@ -200,12 +241,6 @@ Example 1:
 		"",
 	)
 
-	ErrUnexpectedDataContent = newErrFn(
-		"Unexpected data content",
-		"Please contact MinIO at https://slack.min.io",
-		"",
-	)
-
 	ErrUnexpectedError = newErrFn(
 		"Unexpected error",
 		"Please contact MinIO at https://slack.min.io",
@@ -215,7 +250,7 @@ Example 1:
 	ErrInvalidCompressionIncludesValue = newErrFn(
 		"Invalid compression include value",
 		"Please check the passed value",
-		"Compress extensions/mime-types are delimited by `,`. For eg, MINIO_COMPRESS_ATTR=\"A,B,C\"",
+		"Compress extensions/mime-types are delimited by `,`. For eg, MINIO_COMPRESS_MIME_TYPES=\"A,B,C\"",
 	)
 
 	ErrInvalidGWSSEValue = newErrFn(

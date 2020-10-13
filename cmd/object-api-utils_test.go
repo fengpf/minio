@@ -18,6 +18,7 @@ package cmd
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 	"reflect"
@@ -25,7 +26,9 @@ import (
 	"testing"
 
 	"github.com/klauspost/compress/s2"
+	"github.com/minio/minio/cmd/config/compress"
 	"github.com/minio/minio/cmd/crypto"
+	"github.com/minio/minio/pkg/trie"
 )
 
 // Tests validate bucket name.
@@ -104,13 +107,24 @@ func TestIsValidObjectName(t *testing.T) {
 		{"f*le", true},
 		{"contains-^-carret", true},
 		{"contains-|-pipe", true},
-		{"contains-\"-quote", true},
 		{"contains-`-tick", true},
 		{"..test", true},
 		{".. test", true},
 		{". test", true},
 		{".test", true},
 		{"There are far too many object names, and far too few bucket names!", true},
+		{"!\"#$%&'()*+,-.／:;<=>?@[\\]^_`{|}~/!\"#$%&'()*+,-.／:;<=>?@[\\]^_`{|}~)", true},
+		{"!\"#$%&'()*+,-.／:;<=>?@[\\]^_`{|}~", true},
+		{"␀␁␂␃␄␅␆␇␈␉␊␋␌␍␎␏␐␑␒␓␔␕␖␗␘␙␚␛␜␝␞␟␡", true},
+		{"trailing VT␋/trailing VT␋", true},
+		{"␋leading VT/␋leading VT", true},
+		{"~leading tilde", true},
+		{"\rleading CR", true},
+		{"\nleading LF", true},
+		{"\tleading HT", true},
+		{"trailing CR\r", true},
+		{"trailing LF\n", true},
+		{"trailing HT\t", true},
 		// cases for which test should fail.
 		// passing invalid object names.
 		{"", false},
@@ -121,7 +135,8 @@ func TestIsValidObjectName(t *testing.T) {
 		{" ../etc", false},
 		{"./././", false},
 		{"./etc", false},
-		{"contains-\\-backslash", false},
+		{`contains//double/forwardslash`, false},
+		{`//contains/double-forwardslash-prefix`, false},
 		{string([]byte{0xff, 0xfe, 0xfd}), false},
 	}
 
@@ -417,9 +432,9 @@ func TestExcludeForCompression(t *testing.T) {
 		},
 	}
 	for i, test := range testCases {
-		globalIsCompressionEnabled = true
-		got := excludeForCompression(test.header, test.object)
-		globalIsCompressionEnabled = false
+		got := excludeForCompression(test.header, test.object, compress.Config{
+			Enabled: true,
+		})
 		if got != test.result {
 			t.Errorf("Test %d - expected %v but received %v",
 				i+1, test.result, got)
@@ -427,40 +442,22 @@ func TestExcludeForCompression(t *testing.T) {
 	}
 }
 
-// Test getPartFile function.
-func TestGetPartFile(t *testing.T) {
-	testCases := []struct {
-		entries    []string
-		partNumber int
-		etag       string
-		result     string
-	}{
-		{
-			entries:    []string{"00001.8a034f82cb9cb31140d87d3ce2a9ede3.67108864", "fs.json", "00002.d73d8ab724016dfb051e2d3584495c54.32891137"},
-			partNumber: 1,
-			etag:       "8a034f82cb9cb31140d87d3ce2a9ede3",
-			result:     "00001.8a034f82cb9cb31140d87d3ce2a9ede3.67108864",
-		},
-		{
-			entries:    []string{"00001.8a034f82cb9cb31140d87d3ce2a9ede3.67108864", "fs.json", "00002.d73d8ab724016dfb051e2d3584495c54.32891137"},
-			partNumber: 2,
-			etag:       "d73d8ab724016dfb051e2d3584495c54",
-			result:     "00002.d73d8ab724016dfb051e2d3584495c54.32891137",
-		},
-		{
-			entries:    []string{"00001.8a034f82cb9cb31140d87d3ce2a9ede3.67108864", "fs.json", "00002.d73d8ab724016dfb051e2d3584495c54.32891137"},
-			partNumber: 1,
-			etag:       "d73d8ab724016dfb051e2d3584495c54",
-			result:     "",
-		},
+func BenchmarkGetPartFileWithTrie(b *testing.B) {
+	b.ResetTimer()
+
+	entriesTrie := trie.NewTrie()
+	for i := 1; i <= 10000; i++ {
+		entriesTrie.Insert(fmt.Sprintf("%.5d.8a034f82cb9cb31140d87d3ce2a9ede3.67108864", i))
 	}
-	for i, test := range testCases {
-		got := getPartFile(test.entries, test.partNumber, test.etag)
-		if got != test.result {
-			t.Errorf("Test %d - expected %s but received %s",
-				i+1, test.result, got)
+
+	for i := 1; i <= 10000; i++ {
+		partFile := getPartFile(entriesTrie, i, "8a034f82cb9cb31140d87d3ce2a9ede3")
+		if partFile == "" {
+			b.Fatal("partFile returned is empty")
 		}
 	}
+
+	b.ReportAllocs()
 }
 
 func TestGetActualSize(t *testing.T) {
@@ -508,7 +505,7 @@ func TestGetActualSize(t *testing.T) {
 		},
 	}
 	for i, test := range testCases {
-		got := test.objInfo.GetActualSize()
+		got, _ := test.objInfo.GetActualSize()
 		if got != test.result {
 			t.Errorf("Test %d - expected %d but received %d",
 				i+1, test.result, got)

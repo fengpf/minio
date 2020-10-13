@@ -27,6 +27,14 @@ import (
 	"github.com/minio/minio/cmd/logger"
 )
 
+type errHashMismatch struct {
+	message string
+}
+
+func (err *errHashMismatch) Error() string {
+	return err.message
+}
+
 // Calculates bitrot in chunks and writes the hash into the stream.
 type streamingBitrotWriter struct {
 	iow       *io.PipeWriter
@@ -73,7 +81,7 @@ func newStreamingBitrotWriter(disk StorageAPI, volume, filePath string, length i
 			bitrotSumsTotalSize := ceilFrac(length, shardSize) * int64(h.Size()) // Size used for storing bitrot checksums.
 			totalFileSize = bitrotSumsTotalSize + length
 		}
-		err := disk.CreateFile(volume, filePath, totalFileSize, r)
+		err := disk.CreateFile(context.TODO(), volume, filePath, totalFileSize, r)
 		r.CloseWithError(err)
 		close(bw.canClose)
 	}()
@@ -111,7 +119,7 @@ func (b *streamingBitrotReader) ReadAt(buf []byte, offset int64) (int, error) {
 		// For the first ReadAt() call we need to open the stream for reading.
 		b.currOffset = offset
 		streamOffset := (offset/b.shardSize)*int64(b.h.Size()) + offset
-		b.rc, err = b.disk.ReadFileStream(b.volume, b.filePath, streamOffset, b.tillOffset-streamOffset)
+		b.rc, err = b.disk.ReadFileStream(context.TODO(), b.volume, b.filePath, streamOffset, b.tillOffset-streamOffset)
 		if err != nil {
 			return 0, err
 		}
@@ -132,9 +140,9 @@ func (b *streamingBitrotReader) ReadAt(buf []byte, offset int64) (int, error) {
 	b.h.Write(buf)
 
 	if !bytes.Equal(b.h.Sum(nil), b.hashBytes) {
-		err = fmt.Errorf("hashes do not match expected %s, got %s",
-			hex.EncodeToString(b.hashBytes), hex.EncodeToString(b.h.Sum(nil)))
-		logger.LogIf(context.Background(), err)
+		err := &errHashMismatch{fmt.Sprintf("Disk: %s  -> %s/%s - content hash does not match - expected %s, got %s",
+			b.disk, b.volume, b.filePath, hex.EncodeToString(b.hashBytes), hex.EncodeToString(b.h.Sum(nil)))}
+		logger.LogIf(GlobalContext, err)
 		return 0, err
 	}
 	b.currOffset += int64(len(buf))

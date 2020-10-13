@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 var (
@@ -158,13 +159,13 @@ func (v Value) ToFloat() (val float64, ok bool) {
 	return 0, false
 }
 
-// ToInt converts value to int.
+// ToInt returns the value if int.
 func (v Value) ToInt() (val int64, ok bool) {
 	val, ok = v.value.(int64)
 	return
 }
 
-// ToString converts value to string.
+// ToString returns the value if string.
 func (v Value) ToString() (val string, ok bool) {
 	val, ok = v.value.(string)
 	return
@@ -215,7 +216,7 @@ func (v Value) ToTimestamp() (t time.Time, ok bool) {
 	return
 }
 
-// ToBytes converts Value to byte-slice.
+// ToBytes returns the value if byte-slice.
 func (v Value) ToBytes() (val []byte, ok bool) {
 	val, ok = v.value.([]byte)
 	return
@@ -308,7 +309,7 @@ func (v Value) CSVString() string {
 // floatToValue converts a float into int representation if needed.
 func floatToValue(f float64) *Value {
 	intPart, fracPart := math.Modf(f)
-	if fracPart == 0 {
+	if fracPart == 0 && intPart < math.MaxInt64 && intPart > math.MinInt64 {
 		return FromInt(int64(intPart))
 	}
 	return FromFloat(f)
@@ -338,6 +339,48 @@ const (
 	opEq   = "="
 	opIneq = "!="
 )
+
+// InferBytesType will attempt to infer the data type of bytes.
+// Will fail if value type is not bytes or it would result in invalid utf8.
+// ORDER: int, float, bool, JSON (object or array), timestamp, string
+// If the content is valid JSON, the type will still be bytes.
+func (v *Value) InferBytesType() (err error) {
+	b, ok := v.ToBytes()
+	if !ok {
+		return fmt.Errorf("InferByteType: Input is not bytes, but %v", v.GetTypeString())
+	}
+
+	// Check for numeric inference
+	if x, ok := v.bytesToInt(); ok {
+		v.setInt(x)
+		return nil
+	}
+	if x, ok := v.bytesToFloat(); ok {
+		v.setFloat(x)
+		return nil
+	}
+	if x, ok := v.bytesToBool(); ok {
+		v.setBool(x)
+		return nil
+	}
+
+	asString := strings.TrimSpace(v.bytesToString())
+	if len(b) > 0 &&
+		(strings.HasPrefix(asString, "{") || strings.HasPrefix(asString, "[")) {
+		return nil
+	}
+
+	if t, err := parseSQLTimestamp(asString); err == nil {
+		v.setTimestamp(t)
+		return nil
+	}
+	if !utf8.Valid(b) {
+		return errors.New("value is not valid utf-8")
+	}
+	// Fallback to string
+	v.setString(asString)
+	return
+}
 
 // When numeric types are compared, type promotions could happen. If
 // values do not have types (e.g. when reading from CSV), for
@@ -402,7 +445,14 @@ func (v *Value) compareOp(op string, a *Value) (res bool, err error) {
 		return timestampCompare(op, timestampV, timestampA), nil
 	}
 
-	return false, errCmpMismatchedTypes
+	// Types cannot be compared, they do not match.
+	switch op {
+	case opEq:
+		return false, nil
+	case opIneq:
+		return true, nil
+	}
+	return false, errCmpInvalidBoolOperator
 }
 
 func inferTypesForCmp(a *Value, b *Value) error {
@@ -735,6 +785,7 @@ func intCompare(op string, left, right int64) bool {
 }
 
 func floatCompare(op string, left, right float64) bool {
+	diff := math.Abs(left - right)
 	switch op {
 	case opLt:
 		return left < right
@@ -745,9 +796,9 @@ func floatCompare(op string, left, right float64) bool {
 	case opGte:
 		return left >= right
 	case opEq:
-		return left == right
+		return diff < floatCmpTolerance
 	case opIneq:
-		return left != right
+		return diff > floatCmpTolerance
 	}
 	// This case does not happen
 	return false

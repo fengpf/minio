@@ -17,7 +17,6 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -28,9 +27,9 @@ import (
 func printGatewayStartupMessage(apiEndPoints []string, backendType string) {
 	strippedAPIEndpoints := stripStandardPorts(apiEndPoints)
 	// If cache layer is enabled, print cache capacity.
-	cacheObjectAPI := newCacheObjectsFn()
-	if cacheObjectAPI != nil {
-		printCacheStorageInfo(cacheObjectAPI.StorageInfo(context.Background()))
+	cacheAPI := newCachedObjectLayerFn()
+	if cacheAPI != nil {
+		printCacheStorageInfo(cacheAPI.StorageInfo(GlobalContext))
 	}
 	// Prints credential.
 	printGatewayCommonMsg(strippedAPIEndpoints)
@@ -44,15 +43,17 @@ func printGatewayStartupMessage(apiEndPoints []string, backendType string) {
 
 	// SSL is configured reads certification chain, prints
 	// authority and expiry.
-	if globalIsSSL {
-		printCertificateMsg(globalPublicCerts)
+	if color.IsTerminal() && !globalCLIContext.Anonymous {
+		if globalIsSSL {
+			printCertificateMsg(globalPublicCerts)
+		}
 	}
 }
 
 // Prints common server startup message. Prints credential, region and browser access.
 func printGatewayCommonMsg(apiEndpoints []string) {
 	// Get saved credentials.
-	cred := globalServerConfig.GetCredential()
+	cred := globalActiveCred
 
 	apiEndpointStr := strings.Join(apiEndpoints, "  ")
 
@@ -64,7 +65,7 @@ func printGatewayCommonMsg(apiEndpoints []string) {
 	}
 	printEventNotifiers()
 
-	if globalIsBrowserEnabled {
+	if globalBrowserEnabled {
 		logStartupMessage(color.Blue("\nBrowser Access:"))
 		logStartupMessage(fmt.Sprintf(getFormatStr(len(apiEndpointStr), 3), apiEndpointStr))
 	}

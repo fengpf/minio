@@ -1,5 +1,5 @@
 /*
- * MinIO Cloud Storage, (C) 2016 MinIO, Inc.
+ * MinIO Cloud Storage, (C) 2016-2020 MinIO, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,16 +32,24 @@ func (a badDisk) String() string {
 	return "bad-disk"
 }
 
-func (a badDisk) AppendFile(volume string, path string, buf []byte) error {
+func (a badDisk) AppendFile(ctx context.Context, volume string, path string, buf []byte) error {
 	return errFaultyDisk
 }
 
-func (a badDisk) ReadFileStream(volume, path string, offset, length int64) (io.ReadCloser, error) {
+func (a badDisk) ReadFileStream(ctx context.Context, volume, path string, offset, length int64) (io.ReadCloser, error) {
 	return nil, errFaultyDisk
 }
 
-func (a badDisk) CreateFile(volume, path string, size int64, reader io.Reader) error {
+func (a badDisk) UpdateBloomFilter(ctx context.Context, oldest, current uint64) (*bloomFilterResponse, error) {
+	return nil, errFaultyDisk
+}
+
+func (a badDisk) CreateFile(ctx context.Context, volume, path string, size int64, reader io.Reader) error {
 	return errFaultyDisk
+}
+
+func (badDisk) Hostname() string {
+	return ""
 }
 
 const oneMiByte = 1 * humanize.MiByte
@@ -187,7 +195,7 @@ func benchmarkErasureEncode(data, parity, dataDown, parityDown int, size int64, 
 			if disk == OfflineDisk {
 				continue
 			}
-			disk.DeleteFile("testbucket", "object")
+			disk.DeleteFile(context.Background(), "testbucket", "object")
 			writers[i] = newBitrotWriter(disk, "testbucket", "object", erasure.ShardFileSize(size), DefaultBitrotAlgorithm, erasure.ShardSize())
 		}
 		_, err := erasure.Encode(context.Background(), bytes.NewReader(content), writers, buffer, erasure.dataBlocks+1)

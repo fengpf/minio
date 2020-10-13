@@ -17,30 +17,30 @@
 package cmd
 
 import (
+	"context"
 	"testing"
 
-	"github.com/minio/dsync/v2"
-	xnet "github.com/minio/minio/pkg/net"
+	"github.com/minio/minio/pkg/dsync"
 )
 
 // Tests lock rpc client.
 func TestLockRESTlient(t *testing.T) {
-	host, err := xnet.ParseHost("localhost:9000")
+	endpoint, err := NewEndpoint("http://localhost:9000")
 	if err != nil {
 		t.Fatalf("unexpected error %v", err)
 	}
-	lkClient := newlockRESTClient(host)
-	if lkClient.connected == 0 {
+	lkClient := newlockRESTClient(endpoint)
+	if !lkClient.IsOnline() {
 		t.Fatalf("unexpected error. connection failed")
 	}
 
 	// Attempt all calls.
-	_, err = lkClient.RLock(dsync.LockArgs{})
+	_, err = lkClient.RLock(context.Background(), dsync.LockArgs{})
 	if err == nil {
 		t.Fatal("Expected for Rlock to fail")
 	}
 
-	_, err = lkClient.Lock(dsync.LockArgs{})
+	_, err = lkClient.Lock(context.Background(), dsync.LockArgs{})
 	if err == nil {
 		t.Fatal("Expected for Lock to fail")
 	}
@@ -53,15 +53,5 @@ func TestLockRESTlient(t *testing.T) {
 	_, err = lkClient.Unlock(dsync.LockArgs{})
 	if err == nil {
 		t.Fatal("Expected for Unlock to fail")
-	}
-
-	_, err = lkClient.ForceUnlock(dsync.LockArgs{})
-	if err == nil {
-		t.Fatal("Expected for ForceUnlock to fail")
-	}
-
-	_, err = lkClient.Expired(dsync.LockArgs{})
-	if err == nil {
-		t.Fatal("Expected for Expired to fail")
 	}
 }

@@ -42,14 +42,21 @@ func main() {
 }
 
 ```
-| Service operations                  | Info operations                                    | Healing operations | Config operations         | Top operations          | IAM operations                        | Misc                                              | KMS                             |
-|:------------------------------------|:---------------------------------------------------|:-------------------|:--------------------------|:------------------------|:--------------------------------------|:--------------------------------------------------|:--------------------------------|
-| [`ServiceRestart`](#ServiceRestart) | [`ServerInfo`](#ServerInfo)                        | [`Heal`](#Heal)    | [`GetConfig`](#GetConfig) | [`TopLocks`](#TopLocks) | [`AddUser`](#AddUser)                 |                                                   | [`GetKeyStatus`](#GetKeyStatus) |
-| [`ServiceStop`](#ServiceStop)       | [`ServerCPULoadInfo`](#ServerCPULoadInfo)          |                    | [`SetConfig`](#SetConfig) |                         | [`SetUserPolicy`](#SetUserPolicy)     | [`StartProfiling`](#StartProfiling)               |                                 |
-|                                     | [`ServerMemUsageInfo`](#ServerMemUsageInfo)        |                    |                           |                         | [`ListUsers`](#ListUsers)             | [`DownloadProfilingData`](#DownloadProfilingData) |                                 |
-| [`ServiceTrace`](#ServiceTrace)     | [`ServerDrivesPerfInfo`](#ServerDrivesPerfInfo)    |                    |                           |                         | [`AddCannedPolicy`](#AddCannedPolicy) | [`ServerUpdate`](#ServerUpdate)                   |                                 |
-|                                     | [`NetPerfInfo`](#NetPerfInfo)                      |                    |                           |                         |                                       |                                                   |                                 |
-|                                     | [`ServerCPUHardwareInfo`](#ServerCPUHardwareInfo)  |                    |                           |                         |                                       |                                                   |                                 |
+
+| Service operations                  | Info operations                          | Healing operations | Config operations         |
+|:------------------------------------|:-----------------------------------------|:-------------------|:--------------------------|
+| [`ServiceTrace`](#ServiceTrace)     | [`ServerInfo`](#ServerInfo)              | [`Heal`](#Heal)    | [`GetConfig`](#GetConfig) |
+| [`ServiceStop`](#ServiceStop)       | [`StorageInfo`](#StorageInfo)            |                    | [`SetConfig`](#SetConfig) |
+| [`ServiceRestart`](#ServiceRestart) | [`AccountUsageInfo`](#AccountUsageInfo)  |                    |                           |
+
+
+
+| Top operations          | IAM operations                        | Misc                                              | KMS                             |
+|:------------------------|:--------------------------------------|:--------------------------------------------------|:--------------------------------|
+| [`TopLocks`](#TopLocks) | [`AddUser`](#AddUser)                 | [`StartProfiling`](#StartProfiling)               | [`GetKeyStatus`](#GetKeyStatus) |
+|                         | [`SetUserPolicy`](#SetUserPolicy)     | [`DownloadProfilingData`](#DownloadProfilingData) |                                 |
+|                         | [`ListUsers`](#ListUsers)             | [`ServerUpdate`](#ServerUpdate)                   |                                 |
+|                         | [`AddCannedPolicy`](#AddCannedPolicy) |                                                   |                                 |
 
 ## 1. Constructor
 <a name="MinIO"></a>
@@ -69,7 +76,7 @@ __Parameters__
 ## 2. Service operations
 
 <a name="ServiceStatus"></a>
-### ServiceStatus() (ServiceStatusMetadata, error)
+### ServiceStatus(ctx context.Context) (ServiceStatusMetadata, error)
 Fetch service status, replies disk space used, backend type and total disks offline/online (applicable in distributed mode).
 
 | Param           | Type                    | Description                                                |
@@ -87,7 +94,7 @@ Fetch service status, replies disk space used, backend type and total disks offl
 
  ```go
 
-	st, err := madmClnt.ServiceStatus()
+	st, err := madmClnt.ServiceStatus(context.Background())
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -96,14 +103,14 @@ Fetch service status, replies disk space used, backend type and total disks offl
  ```
 
 <a name="ServiceRestart"></a>
-### ServiceRestart() error
+### ServiceRestart(ctx context.Context) error
 Sends a service action restart command to MinIO server.
 
  __Example__
 
 ```go
    // To restart the service, restarts all servers in the cluster.
-   err := madmClnt.ServiceRestart()
+   err := madmClnt.ServiceRestart(context.Background())
    if err != nil {
        log.Fatalln(err)
    }
@@ -111,14 +118,14 @@ Sends a service action restart command to MinIO server.
 ```
 
 <a name="ServiceStop"></a>
-### ServiceStop() error
+### ServiceStop(ctx context.Context) error
 Sends a service action stop command to MinIO server.
 
  __Example__
 
 ```go
    // To stop the service, stops all servers in the cluster.
-   err := madmClnt.ServiceStop()
+   err := madmClnt.ServiceStop(context.Background())
    if err != nil {
        log.Fatalln(err)
    }
@@ -126,7 +133,7 @@ Sends a service action stop command to MinIO server.
 ```
 
 <a name="ServiceTrace"></a>
-### ServiceTrace(allTrace bool, doneCh <-chan struct{}) <-chan TraceInfo
+### ServiceTrace(ctx context.Context, allTrace bool, doneCh <-chan struct{}) <-chan TraceInfo
 Enable HTTP request tracing on all nodes in a MinIO cluster
 
 __Example__
@@ -137,7 +144,7 @@ __Example__
     // listen to all trace including internal API calls
     allTrace := true
     // Start listening on all trace activity.
-    traceCh := madmClnt.ServiceTrace(allTrace, doneCh)
+    traceCh := madmClnt.ServiceTrace(context.Background(), allTrace, doneCh)
     for traceInfo := range traceCh {
         fmt.Println(traceInfo.String())
     }
@@ -146,19 +153,15 @@ __Example__
 ## 3. Info operations
 
 <a name="ServerInfo"></a>
-### ServerInfo() ([]ServerInfo, error)
+### ServerInfo(ctx context.Context) ([]ServerInfo, error)
 Fetches information for all cluster nodes, such as server properties, storage information, network statistics, etc.
 
-| Param                           | Type               | Description                                                        |
-|---------------------------------|--------------------|--------------------------------------------------------------------|
-| `si.Addr`                       | _string_           | Address of the server the following information is retrieved from. |
-| `si.ConnStats`                  | _ServerConnStats_  | Connection statistics from the given server.                       |
-| `si.HTTPStats`                  | _ServerHTTPStats_  | HTTP connection statistics from the given server.                  |
-| `si.Properties`                 | _ServerProperties_ | Server properties such as region, notification targets.            |
-| `si.Data.StorageInfo.Used`      | _int64_            | Used disk space.                                                   |
-| `si.Data.StorageInfo.Total`     | _int64_            | Total disk space.                                                  |
-| `si.Data.StorageInfo.Available` | _int64_            | Available disk space.                                              |
-| `si.Data.StorageInfo.Backend`   | _struct{}_         | Represents backend type embedded structure.                        |
+| Param                            | Type               | Description                                                        |
+|----------------------------------|--------------------|--------------------------------------------------------------------|
+| `si.Addr`                        | _string_           | Address of the server the following information is retrieved from. |
+| `si.ConnStats`                   | _ServerConnStats_  | Connection statistics from the given server.                       |
+| `si.HTTPStats`                   | _ServerHTTPStats_  | HTTP connection statistics from the given server.                  |
+| `si.Properties`                  | _ServerProperties_ | Server properties such as region, notification targets.            |
 
 | Param                       | Type            | Description                                        |
 |-----------------------------|-----------------|----------------------------------------------------|
@@ -186,22 +189,10 @@ Fetches information for all cluster nodes, such as server properties, storage in
 | `ServerHTTPStats.TotalDELETEStats`   | _ServerHTTPMethodStats_ | Total statistics regarding DELETE operations            |
 | `ServerHTTPStats.SuccessDELETEStats` | _ServerHTTPMethodStats_ | Total statistics regarding successful DELETE operations |
 
-
 | Param                               | Type     | Description                                     |
 |-------------------------------------|----------|-------------------------------------------------|
 | `ServerHTTPMethodStats.Count`       | _uint64_ | Total number of operations.                     |
 | `ServerHTTPMethodStats.AvgDuration` | _string_ | Average duration of Count number of operations. |
-
-| Param                      | Type            | Description                                                                       |
-|----------------------------|-----------------|-----------------------------------------------------------------------------------|
-| `Backend.Type`             | _BackendType_   | Type of backend used by the server currently only FS or Erasure.                  |
-| `Backend.OnlineDisks`      | _int_           | Total number of disks online (only applies to Erasure backend), is empty for FS.  |
-| `Backend.OfflineDisks`     | _int_           | Total number of disks offline (only applies to Erasure backend), is empty for FS. |
-| `Backend.StandardSCData`   | _int_           | Data disks set for standard storage class, is empty for FS.                       |
-| `Backend.StandardSCParity` | _int_           | Parity disks set for standard storage class, is empty for FS.                     |
-| `Backend.RRSCData`         | _int_           | Data disks set for reduced redundancy storage class, is empty for FS.             |
-| `Backend.RRSCParity`       | _int_           | Parity disks set for reduced redundancy storage class, is empty for FS.           |
-| `Backend.Sets`             | _[][]DriveInfo_ | Represents topology of drives in erasure coded sets.                              |
 
 | Param                | Type     | Description                                           |
 |----------------------|----------|-------------------------------------------------------|
@@ -213,7 +204,7 @@ Fetches information for all cluster nodes, such as server properties, storage in
 
  ```go
 
-	serversInfo, err := madmClnt.ServerInfo()
+	serversInfo, err := madmClnt.ServerInfo(context.Background())
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -224,100 +215,87 @@ Fetches information for all cluster nodes, such as server properties, storage in
 
  ```
 
-<a name="ServerDrivesPerfInfo"></a>
-### ServerDrivesPerfInfo() ([]ServerDrivesPerfInfo, error)
+<a name="StorageInfo"></a>
+### StorageInfo(ctx context.Context) (StorageInfo, error)
 
-Fetches drive performance information for all cluster nodes.
+Fetches Storage information for all cluster nodes.
 
-| Param           | Type               | Description                                                        |
-|-----------------|--------------------|--------------------------------------------------------------------|
-| `di.Addr`       | _string_           | Address of the server the following information is retrieved from. |
-| `di.Error`      | _string_           | Errors (if any) encountered while reaching this node               |
-| `di.DrivesPerf` | _disk.Performance_ | Path of the drive mount on above server and read, write speed.     |
+| Param                   | Type       | Description                                 |
+|-------------------------|------------|---------------------------------------------|
+| `storageInfo.Used`      | _[]int64_  | Used disk spaces.                           |
+| `storageInfo.Total`     | _[]int64_  | Total disk spaces.                          |
+| `storageInfo.Available` | _[]int64_  | Available disk spaces.                      |
+| `StorageInfo.Backend`   | _struct{}_ | Represents backend type embedded structure. |
 
-| Param                         | Type      | Description                                            |
-|-------------------------------|-----------|--------------------------------------------------------|
-| `disk.Performance.Path`       | _string_  | Path of drive mount.                                   |
-| `disk.Performance.Error`      | _string_  | Error (if any) encountered while accessing this drive. |
-| `disk.Performance.WriteSpeed` | _float64_ | Write speed on above path in Bytes/s.                  |
-| `disk.Performance.ReadSpeed`  | _float64_ | Read speed on above path in Bytes/s.                   |
+| Param                      | Type            | Description                                                                                                              |
+|----------------------------|-----------------|--------------------------------------------------------------------------------------------------------------------------|
+| `Backend.Type`             | _BackendType_   | Type of backend used by the server currently only FS or Erasure.                                                         |
+| `Backend.OnlineDisks`      | _BackendDisks_  | Total number of disks online per node (only applies to Erasure backend) represented in map[string]int, is empty for FS.  |
+| `Backend.OfflineDisks`     | _BackendDisks_  | Total number of disks offline per node (only applies to Erasure backend) represented in map[string]int, is empty for FS. |
+| `Backend.StandardSCData`   | _int_           | Data disks set for standard storage class, is empty for FS.                                                              |
+| `Backend.StandardSCParity` | _int_           | Parity disks set for standard storage class, is empty for FS.                                                            |
+| `Backend.RRSCData`         | _int_           | Data disks set for reduced redundancy storage class, is empty for FS.                                                    |
+| `Backend.RRSCParity`       | _int_           | Parity disks set for reduced redundancy storage class, is empty for FS.                                                  |
+| `Backend.Sets`             | _[][]DriveInfo_ | Represents topology of drives in erasure coded sets.                                                                     |
 
-<a name="ServerCPULoadInfo"></a>
-### ServerCPULoadInfo() ([]ServerCPULoadInfo, error)
+__Example__
 
-Fetches CPU utilization for all cluster nodes.
+ ```go
 
-| Param          | Type       | Description                                                         |
-|----------------|------------|---------------------------------------------------------------------|
-| `cpui.Addr`    | _string_   | Address of the server the following information  is retrieved from. |
-| `cpui.Error`   | _string_   | Errors (if any) encountered while reaching this node                |
-| `cpui.CPULoad` | _cpu.Load_ | The load on the CPU.                                                |
+	storageInfo, err := madmClnt.StorageInfo(context.Background())
+	if err != nil {
+		log.Fatalln(err)
+	}
 
-| Param            | Type      | Description                                                     |
-|------------------|-----------|-----------------------------------------------------------------|
-| `cpu.Load.Avg`   | _float64_ | The average utilization of the CPU measured in a 200ms interval |
-| `cpu.Load.Min`   | _float64_ | The minimum utilization of the CPU measured in a 200ms interval |
-| `cpu.Load.Max`   | _float64_ | The maximum utilization of the CPU measured in a 200ms interval |
-| `cpu.Load.Error` | _string_  | Error (if any) encountered while accessing the CPU info         |
+    log.Println(storageInfo)
 
-<a name="ServerMemUsageInfo"></a>
-### ServerMemUsageInfo() ([]ServerMemUsageInfo, error)
+ ```
 
-Fetches Mem utilization for all cluster nodes.
+<a name="AccountUsageInfo"></a>
 
-| Param           | Type        | Description                                                         |
-|-----------------|-------------|---------------------------------------------------------------------|
-| `memi.Addr`     | _string_    | Address of the server the following information  is retrieved from. |
-| `memi.Error`    | _string_    | Errors (if any) encountered while reaching this node                |
-| `memi.MemUsage` | _mem.Usage_ | The utilitzation of Memory                                          |
+### AccountUsageInfo(ctx context.Context) (AccountUsageInfo, error)
 
-| Param             | Type     | Description                                            |
-|-------------------|----------|--------------------------------------------------------|
-| `mem.Usage.Mem`   | _uint64_ | The total number of bytes obtained from the OS         |
-| `mem.Usage.Error` | _string_ | Error (if any) encountered while accessing the CPU info |
+Fetches accounting usage information for the current authenticated user
 
-<a name="NetPerfInfo"></a>
-### NetPerfInfo(int size) (map[string][]NetPerfInfo, error)
+| Param                          | Type                 | Description             |
+|--------------------------------|----------------------|-------------------------|
+| `AccountUsageInfo.AccountName` | _string_             | Account name.           |
+| `AccountUsageInfo.Buckets`     | _[]BucketUsageInfo_  | Bucket usage info.      |
 
-Fetches network performance of all cluster nodes using given sized payload. Returned value is a map containing each node indexed list of performance of other nodes.
 
-| Param            | Type      | Description                                                        |
-|------------------|-----------|--------------------------------------------------------------------|
-| `Addr`           | _string_  | Address of the server the following information is retrieved from. |
-| `Error`          | _string_  | Errors (if any) encountered while reaching this node               |
-| `ReadThroughput` | _uint64_  | Network read throughput of the server in bytes per second          |
+| Param                      | Type            | Description                             |
+|----------------------------|-----------------|-----------------------------------------|
+| `BucketUsageInfo.Name`     | _string_        | The name of the current bucket
+| `BucketUsageInfo.Size`     | _uint64_        | The total size of the current bucket
+| `BucketUsageInfo.Created`  | _time.Time_     | Bucket creation time
+| `BucketUsageInfo.Access`   | _AccountAccess_ | Type of access of the current account
 
-<a name="ServerCPUHardwareInfo"></a>
-### ServerCPUHardwareInfo() ([]ServerCPUHardwareInfo, error)
 
-Fetches hardware information of CPU.
+| Param                  | Type    | Description                                                                                                              |
+|------------------------|---------|------------------------------------------------------------------|
+| `AccountAccess.Read`   | _bool_  | Indicate if the bucket is readable by the current account name.  |
+| `AccountAccess.Write`  | _bool_  | Indocate if the bucket is writable by the current account name.  |
 
-| Param             | Type                | Description                                                         |
-|-------------------|---------------------|---------------------------------------------------------------------|
-| `hwi.Addr`        |      _string_       | Address of the server the following information  is retrieved from. |
-| `hwi.Error`       |      _string_       | Errors (if any) encountered while reaching this node                |
-| `hwi.CPUInfo`     | _[]cpu.InfoStat_    | The CPU hardware info.                                              |
 
-| Param                      | Type     | Description                                            |
-|----------------------------|----------|--------------------------------------------------------|
-| `CPUInfo.CPU`              | _int32_  | CPU                                                    |
-| `CPUInfo.VendorID`         | _string_ | Vendor Id                                              |
-| `CPUInfo.Family`           | _string_ | CPU Family                                             |
-| `CPUInfo.Model`            | _string_ | Model                                                  |
-| `CPUInfo.Stepping`         | _int32_  | Stepping                                               |
-| `CPUInfo.PhysicalId`       | _string_ | Physical Id                                            |
-| `CPUInfo.CoreId`           | _string_ | Core Id                                                |
-| `CPUInfo.Cores`            | _int32_  | Cores                                                  |
-| `CPUInfo.ModelName`        | _string_ | Model Name                                             |
-| `CPUInfo.Mhz`              | _float64_| Mhz                                                    |
-| `CPUInfo.CacheZSize`       | _int32_  | cache sizes                                            |
-| `CPUInfo.Flags`            |_[]string_| Flags                                                  |
-| `CPUInfo.Microcode`        | _string_ | Micro codes                                            |
+__Example__
+
+```go
+
+   accountUsageInfo, err := madmClnt.AccountUsageInfo(context.Background())
+   if err != nil {
+	log.Fatalln(err)
+   }
+
+   log.Println(accountUsageInfo)
+
+```
+
+
 
 ## 5. Heal operations
 
 <a name="Heal"></a>
-### Heal(bucket, prefix string, healOpts HealOpts, clientToken string, forceStart bool, forceStop bool) (start HealStartSuccess, status HealTaskStatus, err error)
+### Heal(ctx context.Context, bucket, prefix string, healOpts HealOpts, clientToken string, forceStart bool, forceStop bool) (start HealStartSuccess, status HealTaskStatus, err error)
 
 Start a heal sequence that scans data under given (possible empty)
 `bucket` and `prefix`. The `recursive` bool turns on recursive
@@ -342,7 +320,7 @@ __Example__
     }
     forceStart := false
     forceStop := false
-    healPath, err := madmClnt.Heal("", "", opts, "", forceStart, forceStop)
+    healPath, err := madmClnt.Heal(context.Background(), "", "", opts, "", forceStart, forceStop)
     if err != nil {
         log.Fatalln(err)
     }
@@ -382,13 +360,13 @@ __Example__
 ## 6. Config operations
 
 <a name="GetConfig"></a>
-### GetConfig() ([]byte, error)
+### GetConfig(ctx context.Context) ([]byte, error)
 Get current `config.json` of a MinIO server.
 
 __Example__
 
 ``` go
-    configBytes, err := madmClnt.GetConfig()
+    configBytes, err := madmClnt.GetConfig(context.Background())
     if err != nil {
         log.Fatalf("failed due to: %v", err)
     }
@@ -405,14 +383,14 @@ __Example__
 
 
 <a name="SetConfig"></a>
-### SetConfig(config io.Reader) error
+### SetConfig(ctx context.Context, config io.Reader) error
 Set a new `config.json` for a MinIO server.
 
 __Example__
 
 ``` go
     config := bytes.NewReader([]byte(`config.json contents go here`))
-    if err := madmClnt.SetConfig(config); err != nil {
+    if err := madmClnt.SetConfig(context.Background(), config); err != nil {
         log.Fatalf("failed due to: %v", err)
     }
     log.Println("SetConfig was successful")
@@ -421,13 +399,13 @@ __Example__
 ## 7. Top operations
 
 <a name="TopLocks"></a>
-### TopLocks() (LockEntries, error)
+### TopLocks(ctx context.Context) (LockEntries, error)
 Get the oldest locks from MinIO server.
 
 __Example__
 
 ``` go
-    locks, err := madmClnt.TopLocks()
+    locks, err := madmClnt.TopLocks(context.Background())
     if err != nil {
         log.Fatalf("failed due to: %v", err)
     }
@@ -443,51 +421,54 @@ __Example__
 ## 8. IAM operations
 
 <a name="AddCannedPolicy"></a>
-### AddCannedPolicy(policyName string, policy string) error
+### AddCannedPolicy(ctx context.Context, policyName string, policy *iampolicy.Policy) error
 Create a new canned policy on MinIO server.
 
 __Example__
 
 ```
-	policy := `{"Version": "2012-10-17","Statement": [{"Action": ["s3:GetObject"],"Effect": "Allow","Resource": ["arn:aws:s3:::my-bucketname/*"],"Sid": ""}]}`
+	policy, err := iampolicy.ParseConfig(strings.NewReader(`{"Version": "2012-10-17","Statement": [{"Action": ["s3:GetObject"],"Effect": "Allow","Resource": ["arn:aws:s3:::my-bucketname/*"],"Sid": ""}]}`))
+    if err != nil {
+        log.Fatalln(err)
+    }
 
-    if err = madmClnt.AddCannedPolicy("get-only", policy); err != nil {
+    if err = madmClnt.AddCannedPolicy(context.Background(), "get-only", policy); err != nil {
 		log.Fatalln(err)
 	}
 ```
 
 <a name="AddUser"></a>
-### AddUser(user string, secret string) error
+### AddUser(ctx context.Context, user string, secret string) error
 Add a new user on a MinIO server.
 
 __Example__
 
 ``` go
-	if err = madmClnt.AddUser("newuser", "newstrongpassword"); err != nil {
+	if err = madmClnt.AddUser(context.Background(), "newuser", "newstrongpassword"); err != nil {
 		log.Fatalln(err)
 	}
 ```
 
 <a name="SetUserPolicy"></a>
-### SetUserPolicy(user string, policyName string) error
+### SetUserPolicy(ctx context.Context, user string, policyName string) error
 Enable a canned policy `get-only` for a given user on MinIO server.
 
 __Example__
 
 ``` go
-	if err = madmClnt.SetUserPolicy("newuser", "get-only"); err != nil {
+	if err = madmClnt.SetUserPolicy(context.Background(), "newuser", "get-only"); err != nil {
 		log.Fatalln(err)
 	}
 ```
 
 <a name="ListUsers"></a>
-### ListUsers() (map[string]UserInfo, error)
+### ListUsers(ctx context.Context) (map[string]UserInfo, error)
 Lists all users on MinIO server.
 
 __Example__
 
 ``` go
-	users, err := madmClnt.ListUsers();
+	users, err := madmClnt.ListUsers(context.Background());
     if err != nil {
 		log.Fatalln(err)
 	}
@@ -499,7 +480,7 @@ __Example__
 ## 9. Misc operations
 
 <a name="ServerUpdate"></a>
-### ServerUpdate(updateURL string) (ServerUpdateStatus, error)
+### ServerUpdate(ctx context.Context, updateURL string) (ServerUpdateStatus, error)
 Sends a update command to MinIO server, to update MinIO server to latest release. In distributed setup it updates all servers atomically.
 
  __Example__
@@ -507,7 +488,7 @@ Sends a update command to MinIO server, to update MinIO server to latest release
 ```go
    // Updates all servers and restarts all the servers in the cluster.
    // optionally takes an updateURL, which is used to update the binary.
-   us, err := madmClnt.ServerUpdate(updateURL)
+   us, err := madmClnt.ServerUpdate(context.Background(), updateURL)
    if err != nil {
        log.Fatalln(err)
    }
@@ -517,13 +498,13 @@ Sends a update command to MinIO server, to update MinIO server to latest release
 ```
 
 <a name="StartProfiling"></a>
-### StartProfiling(profiler string) error
+### StartProfiling(ctx context.Context, profiler string) error
 Ask all nodes to start profiling using the specified profiler mode
 
 __Example__
 
 ``` go
-    startProfilingResults, err = madmClnt.StartProfiling("cpu")
+    startProfilingResults, err = madmClnt.StartProfiling(context.Background(), "cpu")
     if err != nil {
             log.Fatalln(err)
     }
@@ -538,13 +519,13 @@ __Example__
 ```
 
 <a name="DownloadProfilingData"></a>
-### DownloadProfilingData() ([]byte, error)
+### DownloadProfilingData(ctx context.Context) ([]byte, error)
 Download profiling data of all nodes in a zip format.
 
 __Example__
 
 ``` go
-    profilingData, err := madmClnt.DownloadProfilingData()
+    profilingData, err := madmClnt.DownloadProfilingData(context.Background())
     if err != nil {
             log.Fatalln(err)
     }
@@ -572,16 +553,16 @@ __Example__
 ## 11. KMS
 
 <a name="GetKeyStatus"></a>
-### GetKeyStatus(keyID string) (*KMSKeyStatus, error)
+### GetKeyStatus(ctx context.Context, keyID string) (*KMSKeyStatus, error)
 Requests status information about one particular KMS master key
 from a MinIO server. The keyID is optional and the server will
-use the default master key (configured via `MINIO_SSE_VAULT_KEY_NAME`
-or `MINIO_SSE_MASTER_KEY`) if the keyID is empty.
+use the default master key (configured via `MINIO_KMS_VAULT_KEY_NAME`
+or `MINIO_KMS_MASTER_KEY`) if the keyID is empty.
 
 __Example__
 
 ``` go
-    keyInfo, err := madmClnt.GetKeyStatus("my-minio-key")
+    keyInfo, err := madmClnt.GetKeyStatus(context.Background(), "my-minio-key")
     if err != nil {
        log.Fatalln(err)
     }

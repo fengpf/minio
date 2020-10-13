@@ -19,12 +19,12 @@ package csv
 import (
 	"bufio"
 	"bytes"
-	"encoding/csv"
 	"fmt"
 	"io"
 	"runtime"
 	"sync"
 
+	csv "github.com/minio/minio/pkg/csvparser"
 	"github.com/minio/minio/pkg/s3select/sql"
 )
 
@@ -84,7 +84,7 @@ func (r *Reader) Read(dst sql.Record) (sql.Record, error) {
 		}
 	}
 
-	// If no index max, add that.
+	// If no index map, add that.
 	if r.nameIndexMap == nil {
 		r.nameIndexMap = make(map[string]int64)
 		for i := range r.columnNames {
@@ -150,7 +150,7 @@ const csvSplitSize = 128 << 10
 // startReaders will read the header if needed and spin up a parser
 // and a number of workers based on GOMAXPROCS.
 // If an error is returned no goroutines have been started and r.err will have been set.
-func (r *Reader) startReaders(in io.Reader, newReader func(io.Reader) *csv.Reader) error {
+func (r *Reader) startReaders(newReader func(io.Reader) *csv.Reader) error {
 	if r.args.FileHeaderInfo != none {
 		// Read column names
 		// Get one line.
@@ -294,6 +294,12 @@ func NewReader(readCloser io.ReadCloser, args *ReaderArgs) (*Reader, error) {
 		ret := csv.NewReader(r)
 		ret.Comma = []rune(args.FieldDelimiter)[0]
 		ret.Comment = []rune(args.CommentCharacter)[0]
+		ret.Quote = []rune{}
+		if len([]rune(args.QuoteCharacter)) > 0 {
+			// Add the first rune of args.QuoteChracter
+			ret.Quote = append(ret.Quote, []rune(args.QuoteCharacter)[0])
+		}
+		ret.QuoteEscape = []rune(args.QuoteEscapeCharacter)[0]
 		ret.FieldsPerRecord = -1
 		// If LazyQuotes is true, a quote may appear in an unquoted field and a
 		// non-doubled quote may appear in a quoted field.
@@ -304,5 +310,5 @@ func NewReader(readCloser io.ReadCloser, args *ReaderArgs) (*Reader, error) {
 		return ret
 	}
 
-	return r, r.startReaders(csvIn, newCsvReader)
+	return r, r.startReaders(newCsvReader)
 }

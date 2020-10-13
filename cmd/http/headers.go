@@ -38,6 +38,13 @@ const (
 	ContentDisposition = "Content-Disposition"
 	Authorization      = "Authorization"
 	Action             = "Action"
+	Range              = "Range"
+)
+
+// Non standard S3 HTTP response constants
+const (
+	XCache       = "X-Cache"
+	XCacheLookup = "X-Cache-Lookup"
 )
 
 // Standard S3 HTTP request constants
@@ -50,6 +57,15 @@ const (
 	// S3 storage class
 	AmzStorageClass = "x-amz-storage-class"
 
+	// S3 object version ID
+	AmzVersionID    = "x-amz-version-id"
+	AmzDeleteMarker = "x-amz-delete-marker"
+
+	// S3 object tagging
+	AmzObjectTagging = "X-Amz-Tagging"
+	AmzTagCount      = "x-amz-tagging-count"
+	AmzTagDirective  = "X-Amz-Tagging-Directive"
+
 	// S3 extensions
 	AmzCopySourceIfModifiedSince   = "x-amz-copy-source-if-modified-since"
 	AmzCopySourceIfUnmodifiedSince = "x-amz-copy-source-if-unmodified-since"
@@ -57,10 +73,23 @@ const (
 	AmzCopySourceIfNoneMatch = "x-amz-copy-source-if-none-match"
 	AmzCopySourceIfMatch     = "x-amz-copy-source-if-match"
 
-	AmzCopySource          = "X-Amz-Copy-Source"
-	AmzCopySourceVersionID = "X-Amz-Copy-Source-Version-Id"
-	AmzCopySourceRange     = "X-Amz-Copy-Source-Range"
-	AmzMetadataDirective   = "X-Amz-Metadata-Directive"
+	AmzCopySource                 = "X-Amz-Copy-Source"
+	AmzCopySourceVersionID        = "X-Amz-Copy-Source-Version-Id"
+	AmzCopySourceRange            = "X-Amz-Copy-Source-Range"
+	AmzMetadataDirective          = "X-Amz-Metadata-Directive"
+	AmzObjectLockMode             = "X-Amz-Object-Lock-Mode"
+	AmzObjectLockRetainUntilDate  = "X-Amz-Object-Lock-Retain-Until-Date"
+	AmzObjectLockLegalHold        = "X-Amz-Object-Lock-Legal-Hold"
+	AmzObjectLockBypassGovernance = "X-Amz-Bypass-Governance-Retention"
+	AmzBucketReplicationStatus    = "X-Amz-Replication-Status"
+	// Multipart parts count
+	AmzMpPartsCount = "x-amz-mp-parts-count"
+
+	// Object date/time of expiration
+	AmzExpiration = "x-amz-expiration"
+
+	// Dummy putBucketACL
+	AmzACL = "x-amz-acl"
 
 	// Signature V4 related contants.
 	AmzContentSha256        = "X-Amz-Content-Sha256"
@@ -72,6 +101,9 @@ const (
 	AmzCredential           = "X-Amz-Credential"
 	AmzSecurityToken        = "X-Amz-Security-Token"
 	AmzDecodedContentLength = "X-Amz-Decoded-Content-Length"
+
+	AmzMetaUnencryptedContentLength = "X-Amz-Meta-X-Amz-Unencrypted-Content-Length"
+	AmzMetaUnencryptedContentMD5    = "X-Amz-Meta-X-Amz-Unencrypted-Content-Md5"
 
 	// Signature v2 related constants
 	AmzSignatureV2 = "Signature"
@@ -85,4 +117,22 @@ const (
 
 	// Server-Status
 	MinIOServerStatus = "x-minio-server-status"
+
+	// Delete special flag to force delete a bucket
+	MinIOForceDelete = "x-minio-force-delete"
+
+	// Header indicates if the mtime should be preserved by client
+	MinIOSourceMTime = "x-minio-source-mtime"
+
+	// Header indicates if the etag should be preserved by client
+	MinIOSourceETag = "x-minio-source-etag"
+)
+
+// Common http query params S3 API
+const (
+	VersionID = "versionId"
+
+	PartNumber = "partNumber"
+
+	UploadID = "uploadId"
 )

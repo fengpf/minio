@@ -18,8 +18,8 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"fmt"
 
+	xhttp "github.com/minio/minio/cmd/http"
 	"github.com/minio/minio/cmd/logger"
 )
 
@@ -39,12 +39,16 @@ func IsMultiPart(metadata map[string]string) bool {
 func RemoveSensitiveEntries(metadata map[string]string) { // The functions is tested in TestRemoveSensitiveHeaders for compatibility reasons
 	delete(metadata, SSECKey)
 	delete(metadata, SSECopyKey)
+	delete(metadata, xhttp.AmzMetaUnencryptedContentLength)
+	delete(metadata, xhttp.AmzMetaUnencryptedContentMD5)
 }
 
 // RemoveSSEHeaders removes all crypto-specific SSE
 // header entries from the metadata map.
 func RemoveSSEHeaders(metadata map[string]string) {
 	delete(metadata, SSEHeader)
+	delete(metadata, SSEKmsID)
+	delete(metadata, SSEKmsContext)
 	delete(metadata, SSECKeyMD5)
 	delete(metadata, SSECAlgorithm)
 }
@@ -59,6 +63,17 @@ func RemoveInternalEntries(metadata map[string]string) {
 	delete(metadata, S3SealedKey)
 	delete(metadata, S3KMSKeyID)
 	delete(metadata, S3KMSSealedKey)
+}
+
+// IsSourceEncrypted returns true if the source is encrypted
+func IsSourceEncrypted(metadata map[string]string) bool {
+	if _, ok := metadata[SSECAlgorithm]; ok {
+		return true
+	}
+	if _, ok := metadata[SSEHeader]; ok {
+		return true
+	}
+	return false
 }
 
 // IsEncrypted returns true if the object metadata indicates
@@ -114,7 +129,7 @@ func (ssec) IsEncrypted(metadata map[string]string) bool {
 // metadata is nil.
 func CreateMultipartMetadata(metadata map[string]string) map[string]string {
 	if metadata == nil {
-		metadata = map[string]string{}
+		return map[string]string{SSEMultipart: ""}
 	}
 	metadata[SSEMultipart] = ""
 	return metadata
@@ -126,7 +141,7 @@ func CreateMultipartMetadata(metadata map[string]string) map[string]string {
 // is nil.
 func (s3) CreateMetadata(metadata map[string]string, keyID string, kmsKey []byte, sealedKey SealedKey) map[string]string {
 	if sealedKey.Algorithm != SealAlgorithm {
-		logger.CriticalIf(context.Background(), fmt.Errorf("The seal algorithm '%s' is invalid for SSE-S3", sealedKey.Algorithm))
+		logger.CriticalIf(context.Background(), Errorf("The seal algorithm '%s' is invalid for SSE-S3", sealedKey.Algorithm))
 	}
 
 	// There are two possibilites:
@@ -141,7 +156,7 @@ func (s3) CreateMetadata(metadata map[string]string, keyID string, kmsKey []byte
 	}
 
 	if metadata == nil {
-		metadata = map[string]string{}
+		metadata = make(map[string]string, 5)
 	}
 
 	metadata[SSESealAlgorithm] = sealedKey.Algorithm
@@ -172,7 +187,7 @@ func (s3) ParseMetadata(metadata map[string]string) (keyID string, kmsKey []byte
 	}
 	b64SealedKey, ok := metadata[S3SealedKey]
 	if !ok {
-		return keyID, kmsKey, sealedKey, Error("The object metadata is missing the internal sealed key for SSE-S3")
+		return keyID, kmsKey, sealedKey, Errorf("The object metadata is missing the internal sealed key for SSE-S3")
 	}
 
 	// There are two possibilites:
@@ -182,10 +197,10 @@ func (s3) ParseMetadata(metadata map[string]string) (keyID string, kmsKey []byte
 	keyID, idPresent := metadata[S3KMSKeyID]
 	b64KMSSealedKey, kmsKeyPresent := metadata[S3KMSSealedKey]
 	if !idPresent && kmsKeyPresent {
-		return keyID, kmsKey, sealedKey, Error("The object metadata is missing the internal KMS key-ID for SSE-S3")
+		return keyID, kmsKey, sealedKey, Errorf("The object metadata is missing the internal KMS key-ID for SSE-S3")
 	}
 	if idPresent && !kmsKeyPresent {
-		return keyID, kmsKey, sealedKey, Error("The object metadata is missing the internal sealed KMS data key for SSE-S3")
+		return keyID, kmsKey, sealedKey, Errorf("The object metadata is missing the internal sealed KMS data key for SSE-S3")
 	}
 
 	// Check whether all extracted values are well-formed
@@ -198,12 +213,12 @@ func (s3) ParseMetadata(metadata map[string]string) (keyID string, kmsKey []byte
 	}
 	encryptedKey, err := base64.StdEncoding.DecodeString(b64SealedKey)
 	if err != nil || len(encryptedKey) != 64 {
-		return keyID, kmsKey, sealedKey, Error("The internal sealed key for SSE-S3 is invalid")
+		return keyID, kmsKey, sealedKey, Errorf("The internal sealed key for SSE-S3 is invalid")
 	}
 	if idPresent && kmsKeyPresent { // We are using a KMS -> parse the sealed KMS data key.
 		kmsKey, err = base64.StdEncoding.DecodeString(b64KMSSealedKey)
 		if err != nil {
-			return keyID, kmsKey, sealedKey, Error("The internal sealed KMS data key for SSE-S3 is invalid")
+			return keyID, kmsKey, sealedKey, Errorf("The internal sealed KMS data key for SSE-S3 is invalid")
 		}
 	}
 
@@ -217,11 +232,11 @@ func (s3) ParseMetadata(metadata map[string]string) (keyID string, kmsKey []byte
 // It allocates a new metadata map if metadata is nil.
 func (ssec) CreateMetadata(metadata map[string]string, sealedKey SealedKey) map[string]string {
 	if sealedKey.Algorithm != SealAlgorithm {
-		logger.CriticalIf(context.Background(), fmt.Errorf("The seal algorithm '%s' is invalid for SSE-C", sealedKey.Algorithm))
+		logger.CriticalIf(context.Background(), Errorf("The seal algorithm '%s' is invalid for SSE-C", sealedKey.Algorithm))
 	}
 
 	if metadata == nil {
-		metadata = map[string]string{}
+		metadata = make(map[string]string, 3)
 	}
 	metadata[SSESealAlgorithm] = SealAlgorithm
 	metadata[SSEIV] = base64.StdEncoding.EncodeToString(sealedKey.IV[:])
@@ -244,7 +259,7 @@ func (ssec) ParseMetadata(metadata map[string]string) (sealedKey SealedKey, err 
 	}
 	b64SealedKey, ok := metadata[SSECSealedKey]
 	if !ok {
-		return sealedKey, Error("The object metadata is missing the internal sealed key for SSE-C")
+		return sealedKey, Errorf("The object metadata is missing the internal sealed key for SSE-C")
 	}
 
 	// Check whether all extracted values are well-formed
@@ -257,7 +272,7 @@ func (ssec) ParseMetadata(metadata map[string]string) (sealedKey SealedKey, err 
 	}
 	encryptedKey, err := base64.StdEncoding.DecodeString(b64SealedKey)
 	if err != nil || len(encryptedKey) != 64 {
-		return sealedKey, Error("The internal sealed key for SSE-C is invalid")
+		return sealedKey, Errorf("The internal sealed key for SSE-C is invalid")
 	}
 
 	sealedKey.Algorithm = algorithm

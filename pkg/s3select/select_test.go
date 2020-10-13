@@ -18,16 +18,20 @@ package s3select
 
 import (
 	"bytes"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math"
 	"net/http"
 	"os"
 	"reflect"
 	"strings"
 	"testing"
 
-	"github.com/minio/minio-go/v6"
+	"github.com/klauspost/cpuid"
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/simdjson-go"
 )
 
 type testResponseWriter struct {
@@ -56,11 +60,13 @@ func TestJSONQueries(t *testing.T) {
 	{"id": 1,"title": "Second Record","desc": "another text","synonyms": ["some", "synonym", "value"]}
 	{"id": 2,"title": "Second Record","desc": "another text","numbers": [2, 3.0, 4]}
 	{"id": 3,"title": "Second Record","desc": "another text","nested": [[2, 3.0, 4], [7, 8.5, 9]]}`
+
 	var testTable = []struct {
 		name       string
 		query      string
-		requestXML []byte
+		requestXML []byte // override request XML
 		wantResult string
+		withJSON   string // Override JSON input
 	}{
 		{
 			name:       "select-in-array-full",
@@ -88,6 +94,20 @@ func TestJSONQueries(t *testing.T) {
 			query:      `SELECT * from s3object s WHERE 'bar' in s.synonyms[*]`,
 			wantResult: `{"id":0,"title":"Test Record","desc":"Some text","synonyms":["foo","bar","whatever"]}`,
 		},
+		{
+			name:  "bignum-1",
+			query: `SELECT id from s3object s WHERE s.id <= 9223372036854775807`,
+			wantResult: `{"id":0}
+{"id":1}
+{"id":2}
+{"id":3}`},
+		{
+			name:  "bignum-2",
+			query: `SELECT id from s3object s WHERE s.id >= -9223372036854775808`,
+			wantResult: `{"id":0}
+{"id":1}
+{"id":2}
+{"id":3}`},
 		{
 			name:       "donatello-3",
 			query:      `SELECT * from s3object s WHERE 'value' IN s.synonyms[*]`,
@@ -166,11 +186,37 @@ func TestJSONQueries(t *testing.T) {
 			wantResult: `{"id":3,"title":"Second Record","desc":"another text","nested":[[2,3,4],[7,8.5,9]]}`,
 		},
 		{
+			name:       "indexed-list-match-equals-s-star",
+			query:      `SELECT s.* from s3object s WHERE (7,8.5,9) = s.nested[1]`,
+			wantResult: `{"id":3,"title":"Second Record","desc":"another text","nested":[[2,3,4],[7,8.5,9]]}`,
+		},
+		{
+			name:       "indexed-list-match-equals-s-index",
+			query:      `SELECT s.nested[1], s.nested[0] from s3object s WHERE (7,8.5,9) = s.nested[1]`,
+			wantResult: `{"_1":[7,8.5,9],"_2":[2,3,4]}`,
+		},
+		{
 			name:  "indexed-list-match-not-equals",
 			query: `SELECT * from s3object s WHERE (7,8.5,9) != s.nested[1]`,
 			wantResult: `{"id":0,"title":"Test Record","desc":"Some text","synonyms":["foo","bar","whatever"]}
 {"id":1,"title":"Second Record","desc":"another text","synonyms":["some","synonym","value"]}
 {"id":2,"title":"Second Record","desc":"another text","numbers":[2,3,4]}`,
+		},
+		{
+			name:       "indexed-list-square-bracket",
+			query:      `SELECT * from s3object s WHERE [7,8.5,9] = s.nested[1]`,
+			wantResult: `{"id":3,"title":"Second Record","desc":"another text","nested":[[2,3,4],[7,8.5,9]]}`,
+		},
+		{
+			name:       "indexed-list-square-bracket",
+			query:      `SELECT * from s3object s WHERE [7,8.5,9] IN s.nested`,
+			wantResult: `{"id":3,"title":"Second Record","desc":"another text","nested":[[2,3,4],[7,8.5,9]]}`,
+		},
+		{
+			name:  "indexed-list-square-bracket",
+			query: `SELECT * from s3object s WHERE id IN [3,2]`,
+			wantResult: `{"id":2,"title":"Second Record","desc":"another text","numbers":[2,3,4]}
+{"id":3,"title":"Second Record","desc":"another text","nested":[[2,3,4],[7,8.5,9]]}`,
 		},
 		{
 			name:       "index-wildcard-in",
@@ -181,6 +227,31 @@ func TestJSONQueries(t *testing.T) {
 			name:       "index-wildcard-in",
 			query:      `SELECT * from s3object s WHERE (8.0+0.5) IN s.nested[1][*]`,
 			wantResult: `{"id":3,"title":"Second Record","desc":"another text","nested":[[2,3,4],[7,8.5,9]]}`,
+		},
+		{
+			name:       "compare-mixed",
+			query:      `SELECT id from s3object s WHERE value = true`,
+			wantResult: `{"id":1}`,
+			withJSON: `{"id":0, "value": false}
+{"id":1, "value": true}
+{"id":2, "value": 42}
+{"id":3, "value": "true"}
+`,
+		},
+		{
+			name:       "compare-mixed-not",
+			query:      `SELECT COUNT(id) as n from s3object s WHERE value != true`,
+			wantResult: `{"n":3}`,
+			withJSON: `{"id":0, "value": false}
+{"id":1, "value": true}
+{"id":2, "value": 42}
+{"id":3, "value": "true"}
+`,
+		},
+		{
+			name:       "index-wildcard-in",
+			query:      `SELECT * from s3object s WHERE title = 'Test Record'`,
+			wantResult: `{"id":0,"title":"Test Record","desc":"Some text","synonyms":["foo","bar","whatever"]}`,
 		},
 		{
 			name: "select-output-field-as-csv",
@@ -196,6 +267,7 @@ func TestJSONQueries(t *testing.T) {
     </InputSerialization>
     <OutputSerialization>
         <CSV>
+	   <QuoteCharacter>"</QuoteCharacter>
         </CSV>
     </OutputSerialization>
     <RequestProgress>
@@ -203,6 +275,68 @@ func TestJSONQueries(t *testing.T) {
     </RequestProgress>
 </SelectObjectContentRequest>`),
 			wantResult: `"[""foo"",""bar"",""whatever""]"`,
+		},
+		{
+			name:  "document",
+			query: "",
+			requestXML: []byte(`
+<?xml version="1.0" encoding="UTF-8"?>
+<SelectObjectContentRequest>
+    <Expression>select * from s3object[*].elements[*] s where s.element_type = '__elem__merfu'</Expression>
+    <ExpressionType>SQL</ExpressionType>
+    <InputSerialization>
+        <CompressionType>NONE</CompressionType>
+        <JSON>
+            <Type>DOCUMENT</Type>
+        </JSON>
+    </InputSerialization>
+    <OutputSerialization>
+        <JSON>
+        </JSON>
+    </OutputSerialization>
+    <RequestProgress>
+        <Enabled>FALSE</Enabled>
+    </RequestProgress>
+</SelectObjectContentRequest>`),
+			withJSON: `
+{
+  "name": "small_pdf1.pdf",
+  "lume_id": "9507193e-572d-4f95-bcf1-e9226d96be65",
+  "elements": [
+    {
+      "element_type": "__elem__image",
+      "element_id": "859d09c4-7cf1-4a37-9674-3a7de8b56abc",
+      "attributes": {
+        "__attr__image_dpi": 300,
+        "__attr__image_size": [
+          2550,
+          3299
+        ],
+        "__attr__image_index": 1,
+        "__attr__image_format": "JPEG",
+        "__attr__file_extension": "jpg",
+        "__attr__data": null
+      }
+    },
+    {
+      "element_type": "__elem__merfu",
+      "element_id": "d868aefe-ef9a-4be2-b9b2-c9fd89cc43eb",
+      "attributes": {
+        "__attr__image_dpi": 300,
+        "__attr__image_size": [
+          2550,
+          3299
+        ],
+        "__attr__image_index": 2,
+        "__attr__image_format": "JPEG",
+        "__attr__file_extension": "jpg",
+        "__attr__data": null
+      }
+    }
+  ],
+  "data": "asdascasdc1234e123erdasdas"
+}`,
+			wantResult: `{"element_type":"__elem__merfu","element_id":"d868aefe-ef9a-4be2-b9b2-c9fd89cc43eb","attributes":{"__attr__image_dpi":300,"__attr__image_size":[2550,3299],"__attr__image_index":2,"__attr__image_format":"JPEG","__attr__file_extension":"jpg","__attr__data":null}}`,
 		},
 	}
 
@@ -213,8 +347,278 @@ func TestJSONQueries(t *testing.T) {
     <InputSerialization>
         <CompressionType>NONE</CompressionType>
         <JSON>
-            <Type>DOCUMENT</Type>
+            <Type>LINES</Type>
         </JSON>
+    </InputSerialization>
+    <OutputSerialization>
+        <JSON>
+        </JSON>
+    </OutputSerialization>
+    <RequestProgress>
+        <Enabled>FALSE</Enabled>
+    </RequestProgress>
+</SelectObjectContentRequest>`
+
+	for _, testCase := range testTable {
+		t.Run(testCase.name, func(t *testing.T) {
+			// Hack cpuid to the CPU doesn't appear to support AVX2.
+			// Restore whatever happens.
+			defer func(f cpuid.Flags) {
+				cpuid.CPU.Features = f
+			}(cpuid.CPU.Features)
+			cpuid.CPU.Features &= math.MaxUint64 - cpuid.AVX2
+
+			testReq := testCase.requestXML
+			if len(testReq) == 0 {
+				var escaped bytes.Buffer
+				xml.EscapeText(&escaped, []byte(testCase.query))
+				testReq = []byte(fmt.Sprintf(defRequest, escaped.String()))
+			}
+			s3Select, err := NewS3Select(bytes.NewReader(testReq))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if err = s3Select.Open(func(offset, length int64) (io.ReadCloser, error) {
+				in := input
+				if len(testCase.withJSON) > 0 {
+					in = testCase.withJSON
+				}
+				return ioutil.NopCloser(bytes.NewBufferString(in)), nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			w := &testResponseWriter{}
+			s3Select.Evaluate(w)
+			s3Select.Close()
+			resp := http.Response{
+				StatusCode:    http.StatusOK,
+				Body:          ioutil.NopCloser(bytes.NewReader(w.response)),
+				ContentLength: int64(len(w.response)),
+			}
+			res, err := minio.NewSelectResults(&resp, "testbucket")
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			got, err := ioutil.ReadAll(res)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			gotS := strings.TrimSpace(string(got))
+			if !reflect.DeepEqual(gotS, testCase.wantResult) {
+				t.Errorf("received response does not match with expected reply. Query: %s\ngot: %s\nwant:%s", testCase.query, gotS, testCase.wantResult)
+			}
+		})
+		t.Run("simd-"+testCase.name, func(t *testing.T) {
+			if !simdjson.SupportedCPU() {
+				t.Skip("No CPU support")
+			}
+			testReq := testCase.requestXML
+			if len(testReq) == 0 {
+				var escaped bytes.Buffer
+				xml.EscapeText(&escaped, []byte(testCase.query))
+				testReq = []byte(fmt.Sprintf(defRequest, escaped.String()))
+			}
+			s3Select, err := NewS3Select(bytes.NewReader(testReq))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if err = s3Select.Open(func(offset, length int64) (io.ReadCloser, error) {
+				in := input
+				if len(testCase.withJSON) > 0 {
+					in = testCase.withJSON
+				}
+				return ioutil.NopCloser(bytes.NewBufferString(in)), nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			w := &testResponseWriter{}
+			s3Select.Evaluate(w)
+			s3Select.Close()
+			resp := http.Response{
+				StatusCode:    http.StatusOK,
+				Body:          ioutil.NopCloser(bytes.NewReader(w.response)),
+				ContentLength: int64(len(w.response)),
+			}
+			res, err := minio.NewSelectResults(&resp, "testbucket")
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			got, err := ioutil.ReadAll(res)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			gotS := strings.TrimSpace(string(got))
+			if !reflect.DeepEqual(gotS, testCase.wantResult) {
+				t.Errorf("received response does not match with expected reply. Query: %s\ngot: %s\nwant:%s", testCase.query, gotS, testCase.wantResult)
+			}
+		})
+	}
+}
+
+func TestCSVQueries(t *testing.T) {
+	input := `index,ID,CaseNumber,Date,Day,Month,Year,Block,IUCR,PrimaryType,Description,LocationDescription,Arrest,Domestic,Beat,District,Ward,CommunityArea,FBI Code,XCoordinate,YCoordinate,UpdatedOn,Latitude,Longitude,Location
+2700763,7732229,,2010-05-26 00:00:00,26,May,2010,113XX S HALSTED ST,1150,,CREDIT CARD FRAUD,,False,False,2233,22.0,34.0,,11,,,,41.688043288,-87.6422444,"(41.688043288, -87.6422444)"`
+
+	var testTable = []struct {
+		name       string
+		query      string
+		requestXML []byte
+		wantResult string
+	}{
+		{
+			name:       "select-in-text-simple",
+			query:      `SELECT index FROM s3Object s WHERE "Month"='May'`,
+			wantResult: `2700763`,
+		},
+	}
+
+	defRequest := `<?xml version="1.0" encoding="UTF-8"?>
+<SelectObjectContentRequest>
+    <Expression>%s</Expression>
+    <ExpressionType>SQL</ExpressionType>
+    <InputSerialization>
+        <CompressionType>NONE</CompressionType>
+        <CSV>
+        	<FieldDelimiter>,</FieldDelimiter>
+        	<FileHeaderInfo>USE</FileHeaderInfo>
+        	<QuoteCharacter>"</QuoteCharacter>
+        	<QuoteEscapeCharacter>"</QuoteEscapeCharacter>
+        	<RecordDelimiter>\n</RecordDelimiter>
+        </CSV>
+    </InputSerialization>
+    <OutputSerialization>
+        <CSV>
+        </CSV>
+    </OutputSerialization>
+    <RequestProgress>
+        <Enabled>FALSE</Enabled>
+    </RequestProgress>
+</SelectObjectContentRequest>`
+
+	for _, testCase := range testTable {
+		t.Run(testCase.name, func(t *testing.T) {
+			testReq := testCase.requestXML
+			if len(testReq) == 0 {
+				testReq = []byte(fmt.Sprintf(defRequest, testCase.query))
+			}
+			s3Select, err := NewS3Select(bytes.NewReader(testReq))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if err = s3Select.Open(func(offset, length int64) (io.ReadCloser, error) {
+				return ioutil.NopCloser(bytes.NewBufferString(input)), nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			w := &testResponseWriter{}
+			s3Select.Evaluate(w)
+			s3Select.Close()
+			resp := http.Response{
+				StatusCode:    http.StatusOK,
+				Body:          ioutil.NopCloser(bytes.NewReader(w.response)),
+				ContentLength: int64(len(w.response)),
+			}
+			res, err := minio.NewSelectResults(&resp, "testbucket")
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			got, err := ioutil.ReadAll(res)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			gotS := strings.TrimSpace(string(got))
+			if !reflect.DeepEqual(gotS, testCase.wantResult) {
+				t.Errorf("received response does not match with expected reply. Query: %s\ngot: %s\nwant:%s", testCase.query, gotS, testCase.wantResult)
+			}
+		})
+	}
+}
+
+func TestCSVQueries2(t *testing.T) {
+	input := `id,time,num,num2,text
+1,2010-01-01T,7867786,4565.908123,"a text, with comma"
+2,2017-01-02T03:04Z,-5, 0.765111,
+`
+	var testTable = []struct {
+		name       string
+		query      string
+		requestXML []byte // override request XML
+		wantResult string
+	}{
+		{
+			name:       "select-all",
+			query:      `SELECT * from s3object AS s WHERE id = '1'`,
+			wantResult: `{"id":"1","time":"2010-01-01T","num":"7867786","num2":"4565.908123","text":"a text, with comma"}`,
+		},
+		{
+			name:       "select-all-2",
+			query:      `SELECT * from s3object s WHERE id = 2`,
+			wantResult: `{"id":"2","time":"2017-01-02T03:04Z","num":"-5","num2":" 0.765111","text":""}`,
+		},
+		{
+			name:       "select-text-convert",
+			query:      `SELECT CAST(text AS STRING) AS text from s3object s WHERE id = 1`,
+			wantResult: `{"text":"a text, with comma"}`,
+		},
+		{
+			name:       "select-text-direct",
+			query:      `SELECT text from s3object s WHERE id = 1`,
+			wantResult: `{"text":"a text, with comma"}`,
+		},
+		{
+			name:       "select-time-direct",
+			query:      `SELECT time from s3object s WHERE id = 2`,
+			wantResult: `{"time":"2017-01-02T03:04Z"}`,
+		},
+		{
+			name:       "select-int-direct",
+			query:      `SELECT num from s3object s WHERE id = 2`,
+			wantResult: `{"num":"-5"}`,
+		},
+		{
+			name:       "select-float-direct",
+			query:      `SELECT num2 from s3object s WHERE id = 2`,
+			wantResult: `{"num2":" 0.765111"}`,
+		},
+		{
+			name:       "select-in-array",
+			query:      `select id from S3Object s WHERE id in [1,3]`,
+			wantResult: `{"id":"1"}`,
+		},
+		{
+			name:       "select-in-array-matchnone",
+			query:      `select id from S3Object s WHERE s.id in [4,3]`,
+			wantResult: ``,
+		},
+		{
+			name:       "select-float-by-val",
+			query:      `SELECT num2 from s3object s WHERE num2 = 0.765111`,
+			wantResult: `{"num2":" 0.765111"}`,
+		},
+	}
+
+	defRequest := `<?xml version="1.0" encoding="UTF-8"?>
+<SelectObjectContentRequest>
+    <Expression>%s</Expression>
+    <ExpressionType>SQL</ExpressionType>
+    <InputSerialization>
+        <CompressionType>NONE</CompressionType>
+        <CSV>
+            <FileHeaderInfo>USE</FileHeaderInfo>
+	    <QuoteCharacter>"</QuoteCharacter>
+        </CSV>
     </InputSerialization>
     <OutputSerialization>
         <JSON>
@@ -393,7 +797,23 @@ func TestCSVInput(t *testing.T) {
 			s3Select.Close()
 
 			if !reflect.DeepEqual(w.response, testCase.expectedResult) {
-				t.Errorf("received response does not match with expected reply\ngot: %#v\nwant:%#v", w.response, testCase.expectedResult)
+				resp := http.Response{
+					StatusCode:    http.StatusOK,
+					Body:          ioutil.NopCloser(bytes.NewReader(w.response)),
+					ContentLength: int64(len(w.response)),
+				}
+				res, err := minio.NewSelectResults(&resp, "testbucket")
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				got, err := ioutil.ReadAll(res)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+
+				t.Errorf("received response does not match with expected reply\ngot: %#v\nwant:%#v\ndecoded:%s", w.response, testCase.expectedResult, string(got))
 			}
 		})
 	}
@@ -501,13 +921,31 @@ func TestJSONInput(t *testing.T) {
 			s3Select.Close()
 
 			if !reflect.DeepEqual(w.response, testCase.expectedResult) {
-				t.Errorf("received response does not match with expected reply\ngot: %#v\nwant:%#v", w.response, testCase.expectedResult)
+				resp := http.Response{
+					StatusCode:    http.StatusOK,
+					Body:          ioutil.NopCloser(bytes.NewReader(w.response)),
+					ContentLength: int64(len(w.response)),
+				}
+				res, err := minio.NewSelectResults(&resp, "testbucket")
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				got, err := ioutil.ReadAll(res)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+
+				t.Errorf("received response does not match with expected reply\ngot: %#v\nwant:%#v\ndecoded:%s", w.response, testCase.expectedResult, string(got))
 			}
 		})
 	}
 }
 
 func TestParquetInput(t *testing.T) {
+	os.Setenv("MINIO_API_SELECT_PARQUET", "on")
+	defer os.Setenv("MINIO_API_SELECT_PARQUET", "off")
 
 	var testTable = []struct {
 		requestXML     []byte
@@ -579,7 +1017,7 @@ func TestParquetInput(t *testing.T) {
 					offset = fi.Size() + offset
 				}
 
-				if _, err = file.Seek(offset, os.SEEK_SET); err != nil {
+				if _, err = file.Seek(offset, io.SeekStart); err != nil {
 					return nil, err
 				}
 
@@ -600,7 +1038,23 @@ func TestParquetInput(t *testing.T) {
 			s3Select.Close()
 
 			if !reflect.DeepEqual(w.response, testCase.expectedResult) {
-				t.Errorf("received response does not match with expected reply\ngot: %#v\nwant:%#v", w.response, testCase.expectedResult)
+				resp := http.Response{
+					StatusCode:    http.StatusOK,
+					Body:          ioutil.NopCloser(bytes.NewReader(w.response)),
+					ContentLength: int64(len(w.response)),
+				}
+				res, err := minio.NewSelectResults(&resp, "testbucket")
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				got, err := ioutil.ReadAll(res)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+
+				t.Errorf("received response does not match with expected reply\ngot: %#v\nwant:%#v\ndecoded:%s", w.response, testCase.expectedResult, string(got))
 			}
 		})
 	}

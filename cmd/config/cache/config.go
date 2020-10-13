@@ -28,10 +28,16 @@ import (
 
 // Config represents cache config settings
 type Config struct {
-	Drives  []string `json:"drives"`
-	Expiry  int      `json:"expiry"`
-	MaxUse  int      `json:"maxuse"`
-	Exclude []string `json:"exclude"`
+	Enabled       bool     `json:"-"`
+	Drives        []string `json:"drives"`
+	Expiry        int      `json:"expiry"`
+	MaxUse        int      `json:"maxuse"`
+	Quota         int      `json:"quota"`
+	Exclude       []string `json:"exclude"`
+	After         int      `json:"after"`
+	WatermarkLow  int      `json:"watermark_low"`
+	WatermarkHigh int      `json:"watermark_high"`
+	Range         bool     `json:"range"`
 }
 
 // UnmarshalJSON - implements JSON unmarshal interface for unmarshalling
@@ -55,22 +61,41 @@ func (cfg *Config) UnmarshalJSON(data []byte) (err error) {
 		return errors.New("config max use value should not be null or negative")
 	}
 
-	if _, err = parseCacheDrives(_cfg.Drives); err != nil {
-		return err
+	if _cfg.Quota < 0 {
+		return errors.New("config quota value should not be null or negative")
 	}
-	if _, err = parseCacheExcludes(_cfg.Exclude); err != nil {
-		return err
+	if _cfg.After < 0 {
+		return errors.New("cache after value should not be less than 0")
+	}
+	if _cfg.WatermarkLow < 0 || _cfg.WatermarkLow > 100 {
+		return errors.New("config low watermark value should be between 0 and 100")
+	}
+	if _cfg.WatermarkHigh < 0 || _cfg.WatermarkHigh > 100 {
+		return errors.New("config high watermark value should be between 0 and 100")
+	}
+	if _cfg.WatermarkLow > 0 && (_cfg.WatermarkLow >= _cfg.WatermarkHigh) {
+		return errors.New("config low watermark value should be less than high watermark")
 	}
 	return nil
 }
 
 // Parses given cacheDrivesEnv and returns a list of cache drives.
-func parseCacheDrives(drives []string) ([]string, error) {
+func parseCacheDrives(drives string) ([]string, error) {
+	var drivesSlice []string
 	if len(drives) == 0 {
-		return drives, nil
+		return drivesSlice, nil
 	}
+
+	drivesSlice = strings.Split(drives, cacheDelimiterLegacy)
+	if len(drivesSlice) == 1 && drivesSlice[0] == drives {
+		drivesSlice = strings.Split(drives, cacheDelimiter)
+	}
+
 	var endpoints []string
-	for _, d := range drives {
+	for _, d := range drivesSlice {
+		if len(d) == 0 {
+			return nil, config.ErrInvalidCacheDrivesValue(nil).Msg("cache dir cannot be an empty path")
+		}
 		if ellipses.HasEllipses(d) {
 			s, err := parseCacheDrivePaths(d)
 			if err != nil {
@@ -105,8 +130,18 @@ func parseCacheDrivePaths(arg string) (ep []string, err error) {
 }
 
 // Parses given cacheExcludesEnv and returns a list of cache exclude patterns.
-func parseCacheExcludes(excludes []string) ([]string, error) {
-	for _, e := range excludes {
+func parseCacheExcludes(excludes string) ([]string, error) {
+	var excludesSlice []string
+	if len(excludes) == 0 {
+		return excludesSlice, nil
+	}
+
+	excludesSlice = strings.Split(excludes, cacheDelimiterLegacy)
+	if len(excludesSlice) == 1 && excludesSlice[0] == excludes {
+		excludesSlice = strings.Split(excludes, cacheDelimiter)
+	}
+
+	for _, e := range excludesSlice {
 		if len(e) == 0 {
 			return nil, config.ErrInvalidCacheExcludesValue(nil).Msg("cache exclude path (%s) cannot be empty", e)
 		}
@@ -114,5 +149,6 @@ func parseCacheExcludes(excludes []string) ([]string, error) {
 			return nil, config.ErrInvalidCacheExcludesValue(nil).Msg("cache exclude pattern (%s) cannot start with / as prefix", e)
 		}
 	}
-	return excludes, nil
+
+	return excludesSlice, nil
 }

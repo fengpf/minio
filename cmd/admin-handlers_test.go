@@ -25,243 +25,35 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/minio/minio/pkg/auth"
 	"github.com/minio/minio/pkg/madmin"
 )
 
-var (
-	configJSON = []byte(`{
-  "version": "33",
-  "credential": {
-    "accessKey": "minio",
-    "secretKey": "minio123"
-  },
-  "region": "us-east-1",
-  "worm": "off",
-  "storageclass": {
-    "standard": "",
-    "rrs": ""
-  },
-  "cache": {
-    "drives": [],
-    "expiry": 90,
-    "maxuse": 80,
-    "exclude": []
-  },
-  "kms": {
-    "vault": {
-      "endpoint": "",
-      "auth": {
-        "type": "",
-        "approle": {
-          "id": "",
-          "secret": ""
-        }
-      },
-      "key-id": {
-        "name": "",
-        "version": 0
-      }
-    }
-  },
-  "notify": {
-    "amqp": {
-      "1": {
-        "enable": false,
-        "url": "",
-        "exchange": "",
-        "routingKey": "",
-        "exchangeType": "",
-        "deliveryMode": 0,
-        "mandatory": false,
-        "immediate": false,
-        "durable": false,
-        "internal": false,
-        "noWait": false,
-        "autoDeleted": false,
-        "queueDir": "",
-        "queueLimit": 0
-      }
-    },
-    "elasticsearch": {
-      "1": {
-        "enable": false,
-        "format": "namespace",
-        "url": "",
-        "index": "",
-        "queueDir": "",
-        "queueLimit": 0
-      }
-    },
-    "kafka": {
-      "1": {
-        "enable": false,
-        "brokers": null,
-        "topic": "",
-        "queueDir": "",
-        "queueLimit": 0,
-        "tls": {
-          "enable": false,
-          "skipVerify": false,
-          "clientAuth": 0
-        },
-        "sasl": {
-          "enable": false,
-          "username": "",
-          "password": ""
-        }
-      }
-    },
-    "mqtt": {
-      "1": {
-        "enable": false,
-        "broker": "",
-        "topic": "",
-        "qos": 0,
-        "username": "",
-        "password": "",
-        "reconnectInterval": 0,
-	"keepAliveInterval": 0,
-	"queueDir": "",
-        "queueLimit": 0
-      }
-    },
-    "mysql": {
-      "1": {
-        "enable": false,
-        "format": "namespace",
-        "dsnString": "",
-        "table": "",
-        "host": "",
-        "port": "",
-        "user": "",
-        "password": "",
-        "database": "",
-        "queueDir": "",
-        "queueLimit": 0
-      }
-    },
-    "nats": {
-      "1": {
-        "enable": false,
-        "address": "",
-        "subject": "",
-        "username": "",
-        "password": "",
-        "token": "",
-        "secure": false,
-        "pingInterval": 0,
-        "queueDir": "",
-        "queueLimit": 0,
-        "streaming": {
-          "enable": false,
-          "clusterID": "",
-          "async": false,
-          "maxPubAcksInflight": 0
-        }
-      }
-	},
-    "nsq": {
-      "1": {
-        "enable": false,
-        "nsqdAddress": "",
-        "topic": "",
-        "tls": {
-			"enable": false,
-			"skipVerify": false
-		},
-        "queueDir": "",
-        "queueLimit": 0
-      }
-    },
-    "postgresql": {
-      "1": {
-        "enable": false,
-        "format": "namespace",
-        "connectionString": "",
-        "table": "",
-        "host": "",
-        "port": "",
-        "user": "",
-        "password": "",
-        "database": "",
-        "queueDir": "",
-        "queueLimit": 0
-      }
-    },
-    "redis": {
-      "1": {
-        "enable": false,
-        "format": "namespace",
-        "address": "",
-        "password": "",
-        "key": "",
-        "queueDir": "",
-        "queueLimit": 0
-      }
-    },
-    "webhook": {
-      "1": {
-        "enable": false,
-        "endpoint": "",
-        "queueDir": "",
-        "queueLimit": 0
-      }
-    }
-  },
-  "logger": {
-    "console": {
-      "enabled": true
-    },
-    "http": {
-      "1": {
-        "enabled": false,
-        "endpoint": "https://username:password@example.com/api"
-      }
-    }
-  },
-  "compress": {
-    "enabled": false,
-    "extensions":[".txt",".log",".csv",".json"],
-    "mime-types":["text/csv","text/plain","application/json"]
-  },
-  "openid": {
-    "jwks": {
-      "url": ""
-    }
-  },
-  "policy": {
-    "opa": {
-      "url": "",
-      "authToken": ""
-    }
-  }
-}
-`)
-)
-
-// adminXLTestBed - encapsulates subsystems that need to be setup for
+// adminErasureTestBed - encapsulates subsystems that need to be setup for
 // admin-handler unit tests.
-type adminXLTestBed struct {
-	xlDirs   []string
-	objLayer ObjectLayer
-	router   *mux.Router
+type adminErasureTestBed struct {
+	erasureDirs []string
+	objLayer    ObjectLayer
+	router      *mux.Router
 }
 
-// prepareAdminXLTestBed - helper function that setups a single-node
-// XL backend for admin-handler tests.
-func prepareAdminXLTestBed() (*adminXLTestBed, error) {
+// prepareAdminErasureTestBed - helper function that setups a single-node
+// Erasure backend for admin-handler tests.
+func prepareAdminErasureTestBed(ctx context.Context) (*adminErasureTestBed, error) {
+
 	// reset global variables to start afresh.
 	resetTestGlobals()
 
+	// Set globalIsErasure to indicate that the setup uses an erasure
+	// code backend.
+	globalIsErasure = true
+
 	// Initializing objectLayer for HealFormatHandler.
-	objLayer, xlDirs, xlErr := initTestXLObjLayer()
+	objLayer, erasureDirs, xlErr := initTestErasureObjLayer(ctx)
 	if xlErr != nil {
 		return nil, xlErr
 	}
@@ -274,71 +66,47 @@ func prepareAdminXLTestBed() (*adminXLTestBed, error) {
 	// Initialize boot time
 	globalBootTime = UTCNow()
 
-	globalEndpoints = mustGetNewEndpointList(xlDirs...)
+	globalEndpoints = mustGetZoneEndpoints(erasureDirs...)
 
-	// Set globalIsXL to indicate that the setup uses an erasure
-	// code backend.
-	globalIsXL = true
+	newAllSubsystems()
 
-	// initialize NSLock.
-	isDistXL := false
-	initNSLock(isDistXL)
-
-	// Init global heal state
-	if globalIsXL {
-		globalAllHealState = initHealState()
-	}
-
-	globalConfigSys = NewConfigSys()
-
-	globalIAMSys = NewIAMSys()
-	globalIAMSys.Init(objLayer)
-
-	buckets, err := objLayer.ListBuckets(context.Background())
-	if err != nil {
-		return nil, err
-	}
-
-	globalPolicySys = NewPolicySys()
-	globalPolicySys.Init(buckets, objLayer)
-
-	globalNotificationSys = NewNotificationSys(globalServerConfig, globalEndpoints)
-	globalNotificationSys.Init(buckets, objLayer)
+	initAllSubsystems(ctx, objLayer)
 
 	// Setup admin mgmt REST API handlers.
 	adminRouter := mux.NewRouter()
 	registerAdminRouter(adminRouter, true, true)
 
-	return &adminXLTestBed{
-		xlDirs:   xlDirs,
-		objLayer: objLayer,
-		router:   adminRouter,
+	return &adminErasureTestBed{
+		erasureDirs: erasureDirs,
+		objLayer:    objLayer,
+		router:      adminRouter,
 	}, nil
 }
 
 // TearDown - method that resets the test bed for subsequent unit
 // tests to start afresh.
-func (atb *adminXLTestBed) TearDown() {
-	removeRoots(atb.xlDirs)
+func (atb *adminErasureTestBed) TearDown() {
+	removeRoots(atb.erasureDirs)
 	resetTestGlobals()
 }
 
-// initTestObjLayer - Helper function to initialize an XL-based object
+// initTestObjLayer - Helper function to initialize an Erasure-based object
 // layer and set globalObjectAPI.
-func initTestXLObjLayer() (ObjectLayer, []string, error) {
-	xlDirs, err := getRandomDisks(16)
+func initTestErasureObjLayer(ctx context.Context) (ObjectLayer, []string, error) {
+	erasureDirs, err := getRandomDisks(16)
 	if err != nil {
 		return nil, nil, err
 	}
-	endpoints := mustGetNewEndpointList(xlDirs...)
-	format, err := waitForFormatXL(context.Background(), true, endpoints, 1, 16)
+	endpoints := mustGetNewEndpoints(erasureDirs...)
+	storageDisks, format, err := waitForFormatErasure(true, endpoints, 1, 1, 16, "")
 	if err != nil {
-		removeRoots(xlDirs)
+		removeRoots(erasureDirs)
 		return nil, nil, err
 	}
 
 	globalPolicySys = NewPolicySys()
-	objLayer, err := newXLSets(endpoints, format, 1, 16)
+	objLayer := &erasureZones{zones: make([]*erasureSets, 1)}
+	objLayer.zones[0], err = newErasureSets(ctx, endpoints, storageDisks, format)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -347,7 +115,7 @@ func initTestXLObjLayer() (ObjectLayer, []string, error) {
 	globalObjLayerMutex.Lock()
 	globalObjectAPI = objLayer
 	globalObjLayerMutex.Unlock()
-	return objLayer, xlDirs, nil
+	return objLayer, erasureDirs, nil
 }
 
 // cmdType - Represents different service subcomands like status, stop
@@ -396,7 +164,7 @@ func testServiceSignalReceiver(cmd cmdType, t *testing.T) {
 func getServiceCmdRequest(cmd cmdType, cred auth.Credentials) (*http.Request, error) {
 	queryVal := url.Values{}
 	queryVal.Set("action", string(cmd.toServiceAction()))
-	resource := "/minio/admin/v1/service?" + queryVal.Encode()
+	resource := adminPathPrefix + adminAPIVersionPrefix + "/service?" + queryVal.Encode()
 	req, err := newTestRequest(http.MethodPost, resource, 0, nil)
 	if err != nil {
 		return nil, err
@@ -413,9 +181,12 @@ func getServiceCmdRequest(cmd cmdType, cred auth.Credentials) (*http.Request, er
 // testServicesCmdHandler - parametrizes service subcommand tests on
 // cmdType value.
 func testServicesCmdHandler(cmd cmdType, t *testing.T) {
-	adminTestBed, err := prepareAdminXLTestBed()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	adminTestBed, err := prepareAdminErasureTestBed(ctx)
 	if err != nil {
-		t.Fatal("Failed to initialize a single node XL backend for admin handler tests.")
+		t.Fatal("Failed to initialize a single node Erasure backend for admin handler tests.")
 	}
 	defer adminTestBed.TearDown()
 
@@ -435,7 +206,7 @@ func testServicesCmdHandler(cmd cmdType, t *testing.T) {
 			testServiceSignalReceiver(cmd, t)
 		}()
 	}
-	credentials := globalServerConfig.GetCredential()
+	credentials := globalActiveCred
 
 	req, err := getServiceCmdRequest(cmd, credentials)
 	if err != nil {
@@ -465,13 +236,13 @@ func buildAdminRequest(queryVal url.Values, method, path string,
 	contentLength int64, bodySeeker io.ReadSeeker) (*http.Request, error) {
 
 	req, err := newTestRequest(method,
-		"/minio/admin/v1"+path+"?"+queryVal.Encode(),
+		adminPathPrefix+adminAPIVersionPrefix+path+"?"+queryVal.Encode(),
 		contentLength, bodySeeker)
 	if err != nil {
 		return nil, err
 	}
 
-	cred := globalServerConfig.GetCredential()
+	cred := globalActiveCred
 	err = signRequestV4(req, cred.AccessKey, cred.SecretKey)
 	if err != nil {
 		return nil, err
@@ -480,111 +251,15 @@ func buildAdminRequest(queryVal url.Values, method, path string,
 	return req, nil
 }
 
-// TestGetConfigHandler - test for GetConfigHandler.
-func TestGetConfigHandler(t *testing.T) {
-	adminTestBed, err := prepareAdminXLTestBed()
-	if err != nil {
-		t.Fatal("Failed to initialize a single node XL backend for admin handler tests.")
-	}
-	defer adminTestBed.TearDown()
-
-	// Initialize admin peers to make admin RPC calls.
-	globalMinioAddr = "127.0.0.1:9000"
-
-	// Prepare query params for get-config mgmt REST API.
-	queryVal := url.Values{}
-	queryVal.Set("config", "")
-
-	req, err := buildAdminRequest(queryVal, http.MethodGet, "/config", 0, nil)
-	if err != nil {
-		t.Fatalf("Failed to construct get-config object request - %v", err)
-	}
-
-	rec := httptest.NewRecorder()
-	adminTestBed.router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Errorf("Expected to succeed but failed with %d", rec.Code)
-	}
-
-}
-
-// TestSetConfigHandler - test for SetConfigHandler.
-func TestSetConfigHandler(t *testing.T) {
-	adminTestBed, err := prepareAdminXLTestBed()
-	if err != nil {
-		t.Fatal("Failed to initialize a single node XL backend for admin handler tests.")
-	}
-	defer adminTestBed.TearDown()
-
-	// Initialize admin peers to make admin RPC calls.
-	globalMinioAddr = "127.0.0.1:9000"
-
-	// Prepare query params for set-config mgmt REST API.
-	queryVal := url.Values{}
-	queryVal.Set("config", "")
-
-	password := globalServerConfig.GetCredential().SecretKey
-	econfigJSON, err := madmin.EncryptData(password, configJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	req, err := buildAdminRequest(queryVal, http.MethodPut, "/config",
-		int64(len(econfigJSON)), bytes.NewReader(econfigJSON))
-	if err != nil {
-		t.Fatalf("Failed to construct set-config object request - %v", err)
-	}
-
-	rec := httptest.NewRecorder()
-	adminTestBed.router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Errorf("Expected to succeed but failed with %d, body: %s", rec.Code, rec.Body)
-	}
-
-	// Check that a very large config file returns an error.
-	{
-		// Make a large enough config string
-		invalidCfg := []byte(strings.Repeat("A", maxEConfigJSONSize+1))
-		req, err := buildAdminRequest(queryVal, http.MethodPut, "/config",
-			int64(len(invalidCfg)), bytes.NewReader(invalidCfg))
-		if err != nil {
-			t.Fatalf("Failed to construct set-config object request - %v", err)
-		}
-
-		rec := httptest.NewRecorder()
-		adminTestBed.router.ServeHTTP(rec, req)
-		respBody := rec.Body.String()
-		if rec.Code != http.StatusBadRequest ||
-			!strings.Contains(respBody, "Configuration data provided exceeds the allowed maximum of") {
-			t.Errorf("Got unexpected response code or body %d - %s", rec.Code, respBody)
-		}
-	}
-
-	// Check that a config with duplicate keys in an object return
-	// error.
-	{
-		invalidCfg := append(econfigJSON[:len(econfigJSON)-1], []byte(`, "version": "15"}`)...)
-		req, err := buildAdminRequest(queryVal, http.MethodPut, "/config",
-			int64(len(invalidCfg)), bytes.NewReader(invalidCfg))
-		if err != nil {
-			t.Fatalf("Failed to construct set-config object request - %v", err)
-		}
-
-		rec := httptest.NewRecorder()
-		adminTestBed.router.ServeHTTP(rec, req)
-		respBody := rec.Body.String()
-		if rec.Code != http.StatusBadRequest ||
-			!strings.Contains(respBody, "JSON configuration provided is of incorrect format") {
-			t.Errorf("Got unexpected response code or body %d - %s", rec.Code, respBody)
-		}
-	}
-}
-
 func TestAdminServerInfo(t *testing.T) {
-	adminTestBed, err := prepareAdminXLTestBed()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	adminTestBed, err := prepareAdminErasureTestBed(ctx)
 	if err != nil {
-		t.Fatal("Failed to initialize a single node XL backend for admin handler tests.")
+		t.Fatal("Failed to initialize a single node Erasure backend for admin handler tests.")
 	}
+
 	defer adminTestBed.TearDown()
 
 	// Initialize admin peers to make admin RPC calls.
@@ -605,23 +280,14 @@ func TestAdminServerInfo(t *testing.T) {
 		t.Errorf("Expected to succeed but failed with %d", rec.Code)
 	}
 
-	results := []ServerInfo{}
+	results := madmin.InfoMessage{}
 	err = json.NewDecoder(rec.Body).Decode(&results)
 	if err != nil {
 		t.Fatalf("Failed to decode set config result json %v", err)
 	}
 
-	if len(results) == 0 {
-		t.Error("Expected at least one server info result")
-	}
-
-	for _, serverInfo := range results {
-		if serverInfo.Error != "" {
-			t.Errorf("Unexpected error = %v\n", serverInfo.Error)
-		}
-		if serverInfo.Data.Properties.Region != globalMinioDefaultRegion {
-			t.Errorf("Expected %s, got %s", globalMinioDefaultRegion, serverInfo.Data.Properties.Region)
-		}
+	if results.Region != globalMinioDefaultRegion {
+		t.Errorf("Expected %s, got %s", globalMinioDefaultRegion, results.Region)
 	}
 }
 
@@ -633,7 +299,7 @@ func TestToAdminAPIErrCode(t *testing.T) {
 	}{
 		// 1. Server not in quorum.
 		{
-			err:            errXLWriteQuorum,
+			err:            errErasureWriteQuorum,
 			expectedAPIErr: ErrAdminConfigNoQuorum,
 		},
 		// 2. No error.
@@ -644,12 +310,12 @@ func TestToAdminAPIErrCode(t *testing.T) {
 		// 3. Non-admin API specific error.
 		{
 			err:            errDiskNotFound,
-			expectedAPIErr: toAPIErrorCode(context.Background(), errDiskNotFound),
+			expectedAPIErr: toAPIErrorCode(GlobalContext, errDiskNotFound),
 		},
 	}
 
 	for i, test := range testCases {
-		actualErr := toAdminAPIErrCode(context.Background(), test.err)
+		actualErr := toAdminAPIErrCode(GlobalContext, test.err)
 		if actualErr != test.expectedAPIErr {
 			t.Errorf("Test %d: Expected %v but received %v",
 				i+1, test.expectedAPIErr, actualErr)
@@ -657,57 +323,17 @@ func TestToAdminAPIErrCode(t *testing.T) {
 	}
 }
 
-func TestTopLockEntries(t *testing.T) {
-	t1 := UTCNow()
-	t2 := UTCNow().Add(10 * time.Second)
-	peerLocks := []*PeerLocks{
-		{
-			Addr: "1",
-			Locks: map[string][]lockRequesterInfo{
-				"1": {
-					{false, "node2", "ep2", "2", t2, t2, ""},
-					{true, "node1", "ep1", "1", t1, t1, ""},
-				},
-				"2": {
-					{false, "node2", "ep2", "2", t2, t2, ""},
-					{true, "node1", "ep1", "1", t1, t1, ""},
-				},
-			},
-		},
-		{
-			Addr: "2",
-			Locks: map[string][]lockRequesterInfo{
-				"1": {
-					{false, "node2", "ep2", "2", t2, t2, ""},
-					{true, "node1", "ep1", "1", t1, t1, ""},
-				},
-				"2": {
-					{false, "node2", "ep2", "2", t2, t2, ""},
-					{true, "node1", "ep1", "1", t1, t1, ""},
-				},
-			},
-		},
-	}
-	les := topLockEntries(peerLocks)
-	if len(les) != 2 {
-		t.Fatalf("Did not get 2 results")
-	}
-	if les[0].Timestamp.After(les[1].Timestamp) {
-		t.Fatalf("Got wrong sorted value")
-	}
-}
-
 func TestExtractHealInitParams(t *testing.T) {
 	mkParams := func(clientToken string, forceStart, forceStop bool) url.Values {
 		v := url.Values{}
 		if clientToken != "" {
-			v.Add(string(mgmtClientToken), clientToken)
+			v.Add(mgmtClientToken, clientToken)
 		}
 		if forceStart {
-			v.Add(string(mgmtForceStart), "")
+			v.Add(mgmtForceStart, "")
 		}
 		if forceStop {
-			v.Add(string(mgmtForceStop), "")
+			v.Add(mgmtForceStop, "")
 		}
 		return v
 	}
@@ -725,11 +351,11 @@ func TestExtractHealInitParams(t *testing.T) {
 	}
 	varsArr := []map[string]string{
 		// Invalid cases
-		{string(mgmtPrefix): "objprefix"},
+		{mgmtPrefix: "objprefix"},
 		// Valid cases
 		{},
-		{string(mgmtBucket): "bucket"},
-		{string(mgmtBucket): "bucket", string(mgmtPrefix): "objprefix"},
+		{mgmtBucket: "bucket"},
+		{mgmtBucket: "bucket", mgmtPrefix: "objprefix"},
 	}
 
 	// Body is always valid - we do not test JSON decoding.

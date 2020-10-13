@@ -90,6 +90,7 @@ func (c *FSChecksumInfoV1) UnmarshalJSON(data []byte) error {
 	}
 
 	var info checksuminfo
+	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 	err := json.Unmarshal(data, &info)
 	if err != nil {
 		return err
@@ -142,7 +143,7 @@ func (m fsMetaV1) ToObjectInfo(bucket, object string, fi os.FileInfo) ObjectInfo
 		m.Meta["content-type"] = mimedb.TypeByExtension(pathutil.Ext(object))
 	}
 
-	if hasSuffix(object, SlashSeparator) {
+	if HasSuffix(object, SlashSeparator) {
 		m.Meta["etag"] = emptyETag // For directories etag is d41d8cd98f00b204e9800998ecf8427e
 		m.Meta["content-type"] = "application/octet-stream"
 	}
@@ -181,9 +182,14 @@ func (m fsMetaV1) ToObjectInfo(bucket, object string, fi os.FileInfo) ObjectInfo
 			objInfo.Expires = t.UTC()
 		}
 	}
+
+	// Add user tags to the object info
+	objInfo.UserTags = m.Meta[xhttp.AmzObjectTagging]
+
 	// etag/md5Sum has already been extracted. We need to
 	// remove to avoid it from appearing as part of
 	// response headers. e.g, X-Minio-* or X-Amz-*.
+	// Tags have also been extracted, we remove that as well.
 	objInfo.UserDefined = cleanMetadata(m.Meta)
 
 	// All the parts per object.
@@ -219,7 +225,6 @@ func (m *fsMetaV1) ReadFrom(ctx context.Context, lk *lock.LockedFile) (n int64, 
 	}
 
 	if len(fsMetaBuf) == 0 {
-		logger.LogIf(ctx, io.EOF)
 		return 0, io.EOF
 	}
 

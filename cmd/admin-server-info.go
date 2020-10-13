@@ -18,130 +18,46 @@ package cmd
 
 import (
 	"net/http"
-	"os"
 
-	"github.com/minio/minio-go/pkg/set"
-	"github.com/minio/minio/pkg/cpu"
-	"github.com/minio/minio/pkg/disk"
 	"github.com/minio/minio/pkg/madmin"
-	"github.com/minio/minio/pkg/mem"
-
-	cpuhw "github.com/shirou/gopsutil/cpu"
 )
 
-// getLocalMemUsage - returns ServerMemUsageInfo for only the
+// getLocalServerProperty - returns madmin.ServerProperties for only the
 // local endpoints from given list of endpoints
-func getLocalMemUsage(endpoints EndpointList, r *http.Request) ServerMemUsageInfo {
-	var memUsages []mem.Usage
-	var historicUsages []mem.Usage
-	seenHosts := set.NewStringSet()
-	for _, endpoint := range endpoints {
-		if seenHosts.Contains(endpoint.Host) {
-			continue
-		}
-		seenHosts.Add(endpoint.Host)
-
-		// Only proceed for local endpoints
-		if endpoint.IsLocal {
-			memUsages = append(memUsages, mem.GetUsage())
-			historicUsages = append(historicUsages, mem.GetHistoricUsage())
-		}
-	}
+func getLocalServerProperty(endpointZones EndpointZones, r *http.Request) madmin.ServerProperties {
 	addr := r.Host
-	if globalIsDistXL {
-		addr = GetLocalPeer(endpoints)
+	if globalIsDistErasure {
+		addr = GetLocalPeer(endpointZones)
 	}
-	return ServerMemUsageInfo{
-		Addr:          addr,
-		Usage:         memUsages,
-		HistoricUsage: historicUsages,
-	}
-}
-
-// getLocalCPULoad - returns ServerCPULoadInfo for only the
-// local endpoints from given list of endpoints
-func getLocalCPULoad(endpoints EndpointList, r *http.Request) ServerCPULoadInfo {
-	var cpuLoads []cpu.Load
-	var historicLoads []cpu.Load
-	seenHosts := set.NewStringSet()
-	for _, endpoint := range endpoints {
-		if seenHosts.Contains(endpoint.Host) {
-			continue
-		}
-		seenHosts.Add(endpoint.Host)
-
-		// Only proceed for local endpoints
-		if endpoint.IsLocal {
-			cpuLoads = append(cpuLoads, cpu.GetLoad())
-			historicLoads = append(historicLoads, cpu.GetHistoricLoad())
-		}
-	}
-	addr := r.Host
-	if globalIsDistXL {
-		addr = GetLocalPeer(endpoints)
-	}
-	return ServerCPULoadInfo{
-		Addr:         addr,
-		Load:         cpuLoads,
-		HistoricLoad: historicLoads,
-	}
-}
-
-// getLocalDrivesPerf - returns ServerDrivesPerfInfo for only the
-// local endpoints from given list of endpoints
-func getLocalDrivesPerf(endpoints EndpointList, size int64, r *http.Request) madmin.ServerDrivesPerfInfo {
-	var dps []disk.Performance
-	for _, endpoint := range endpoints {
-		// Only proceed for local endpoints
-		if endpoint.IsLocal {
-			if _, err := os.Stat(endpoint.Path); err != nil {
-				// Since this drive is not available, add relevant details and proceed
-				dps = append(dps, disk.Performance{Path: endpoint.Path, Error: err.Error()})
+	network := make(map[string]string)
+	for _, ep := range endpointZones {
+		for _, endpoint := range ep.Endpoints {
+			nodeName := endpoint.Host
+			if nodeName == "" {
+				nodeName = r.Host
+			}
+			if endpoint.IsLocal {
+				// Only proceed for local endpoints
+				network[nodeName] = "online"
 				continue
 			}
-			dp := disk.GetPerformance(pathJoin(endpoint.Path, minioMetaTmpBucket, mustGetUUID()), size)
-			dp.Path = endpoint.Path
-			dps = append(dps, dp)
-		}
-	}
-	addr := r.Host
-	if globalIsDistXL {
-		addr = GetLocalPeer(endpoints)
-	}
-	return madmin.ServerDrivesPerfInfo{
-		Addr: addr,
-		Perf: dps,
-		Size: size,
-	}
-}
-
-// getLocalCPUInfo - returns ServerCPUHardwareInfo only for the
-// local endpoints from given list of endpoints
-func getLocalCPUInfo(endpoints EndpointList, r *http.Request) madmin.ServerCPUHardwareInfo {
-	var cpuHardwares []cpuhw.InfoStat
-	seenHosts := set.NewStringSet()
-	for _, endpoint := range endpoints {
-		if seenHosts.Contains(endpoint.Host) {
-			continue
-		}
-		// Only proceed for local endpoints
-		if endpoint.IsLocal {
-			cpuHardware, err := cpuhw.Info()
-			if err != nil {
-				return madmin.ServerCPUHardwareInfo{
-					Error: err.Error(),
+			_, present := network[nodeName]
+			if !present {
+				if err := IsServerResolvable(endpoint); err == nil {
+					network[nodeName] = "online"
+				} else {
+					network[nodeName] = "offline"
 				}
 			}
-			cpuHardwares = append(cpuHardwares, cpuHardware...)
 		}
 	}
-	addr := r.Host
-	if globalIsDistXL {
-		addr = GetLocalPeer(endpoints)
-	}
 
-	return madmin.ServerCPUHardwareInfo{
-		Addr:    addr,
-		CPUInfo: cpuHardwares,
+	return madmin.ServerProperties{
+		State:    "ok",
+		Endpoint: addr,
+		Uptime:   UTCNow().Unix() - globalBootTime.Unix(),
+		Version:  Version,
+		CommitID: CommitID,
+		Network:  network,
 	}
 }

@@ -19,15 +19,19 @@ package http
 import (
 	"crypto/tls"
 	"errors"
+	"io/ioutil"
 	"net/http"
+	"runtime/pprof"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	humanize "github.com/dustin/go-humanize"
 
-	"github.com/minio/minio-go/v6/pkg/set"
+	"github.com/minio/minio-go/v7/pkg/set"
+	"github.com/minio/minio/cmd/config"
 	"github.com/minio/minio/pkg/certs"
+	"github.com/minio/minio/pkg/env"
 )
 
 const (
@@ -36,9 +40,6 @@ const (
 	// DefaultShutdownTimeout - default shutdown timeout used for graceful http server shutdown.
 	DefaultShutdownTimeout = 5 * time.Second
 
-	// DefaultTCPKeepAliveTimeout - default TCP keep alive timeout for accepted connection.
-	DefaultTCPKeepAliveTimeout = 30 * time.Second
-
 	// DefaultMaxHeaderBytes - default maximum HTTP header size in bytes.
 	DefaultMaxHeaderBytes = 1 * humanize.MiByte
 )
@@ -46,15 +47,12 @@ const (
 // Server - extended http.Server supports multiple addresses to serve and enhanced connection handling.
 type Server struct {
 	http.Server
-	Addrs                  []string      // addresses on which the server listens for new connection.
-	ShutdownTimeout        time.Duration // timeout used for graceful server shutdown.
-	TCPKeepAliveTimeout    time.Duration // timeout used for underneath TCP connection.
-	UpdateBytesReadFunc    func(int)     // function to be called to update bytes read in bufConn.
-	UpdateBytesWrittenFunc func(int)     // function to be called to update bytes written in bufConn.
-	listenerMutex          sync.Mutex    // to guard 'listener' field.
-	listener               *httpListener // HTTP listener for all 'Addrs' field.
-	inShutdown             uint32        // indicates whether the server is in shutdown or not
-	requestCount           int32         // counter holds no. of request in progress.
+	Addrs           []string      // addresses on which the server listens for new connection.
+	ShutdownTimeout time.Duration // timeout used for graceful server shutdown.
+	listenerMutex   sync.Mutex    // to guard 'listener' field.
+	listener        *httpListener // HTTP listener for all 'Addrs' field.
+	inShutdown      uint32        // indicates whether the server is in shutdown or not
+	requestCount    int32         // counter holds no. of request in progress.
 }
 
 // GetRequestCount - returns number of request in progress.
@@ -72,15 +70,11 @@ func (srv *Server) Start() (err error) {
 	handler := srv.Handler // if srv.Handler holds non-synced state -> possible data race
 
 	addrs := set.CreateStringSet(srv.Addrs...).ToSlice() // copy and remove duplicates
-	tcpKeepAliveTimeout := srv.TCPKeepAliveTimeout
 
 	// Create new HTTP listener.
 	var listener *httpListener
 	listener, err = newHTTPListener(
 		addrs,
-		tcpKeepAliveTimeout,
-		srv.UpdateBytesReadFunc,
-		srv.UpdateBytesWrittenFunc,
 	)
 	if err != nil {
 		return err
@@ -89,14 +83,18 @@ func (srv *Server) Start() (err error) {
 	// Wrap given handler to do additional
 	// * return 503 (service unavailable) if the server in shutdown.
 	wrappedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&srv.requestCount, 1)
-		defer atomic.AddInt32(&srv.requestCount, -1)
-
-		// If server is in shutdown, return 503 (service unavailable)
+		// If server is in shutdown.
 		if atomic.LoadUint32(&srv.inShutdown) != 0 {
-			w.WriteHeader(http.StatusServiceUnavailable)
+			// To indicate disable keep-alives
+			w.Header().Set("Connection", "close")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(http.ErrServerClosed.Error()))
+			w.(http.Flusher).Flush()
 			return
 		}
+
+		atomic.AddInt32(&srv.requestCount, 1)
+		defer atomic.AddInt32(&srv.requestCount, -1)
 
 		// Handle request using passed handler.
 		handler.ServeHTTP(w, r)
@@ -119,19 +117,22 @@ func (srv *Server) Shutdown() error {
 	srv.listenerMutex.Lock()
 	if srv.listener == nil {
 		srv.listenerMutex.Unlock()
-		return errors.New("server not initialized")
+		return http.ErrServerClosed
 	}
 	srv.listenerMutex.Unlock()
 
 	if atomic.AddUint32(&srv.inShutdown, 1) > 1 {
 		// shutdown in progress
-		return errors.New("http server already in shutdown")
+		return http.ErrServerClosed
 	}
 
 	// Close underneath HTTP listener.
 	srv.listenerMutex.Lock()
 	err := srv.listener.Close()
 	srv.listenerMutex.Unlock()
+	if err != nil {
+		return err
+	}
 
 	// Wait for opened connection to be closed up to Shutdown timeout.
 	shutdownTimeout := srv.ShutdownTimeout
@@ -141,10 +142,17 @@ func (srv *Server) Shutdown() error {
 	for {
 		select {
 		case <-shutdownTimer.C:
-			return errors.New("timed out. some connections are still active. doing abnormal shutdown")
+			// Write all running goroutines.
+			tmp, err := ioutil.TempFile("", "minio-goroutines-*.txt")
+			if err == nil {
+				_ = pprof.Lookup("goroutine").WriteTo(tmp, 1)
+				tmp.Close()
+				return errors.New("timed out. some connections are still active. goroutines written to " + tmp.Name())
+			}
+			return errors.New("timed out. some connections are still active")
 		case <-ticker.C:
 			if atomic.LoadInt32(&srv.requestCount) <= 0 {
-				return err
+				return nil
 			}
 		}
 	}
@@ -160,7 +168,7 @@ func (srv *Server) Shutdown() error {
 //                              (CBC-SHA ciphers can be enabled again if required)
 //  - RSA key exchange ciphers: Disabled because of dangerous PKCS1-v1.5 RSA
 //                              padding scheme. See Bleichenbacher attacks.
-var defaultCipherSuites = []uint16{
+var secureCipherSuites = []uint16{
 	tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
 	tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
 	tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
@@ -172,32 +180,33 @@ var defaultCipherSuites = []uint16{
 // Go only provides constant-time implementations of Curve25519 and NIST P-256 curve.
 var secureCurves = []tls.CurveID{tls.X25519, tls.CurveP256}
 
+const (
+	enableSecureCiphersEnv = "MINIO_API_SECURE_CIPHERS"
+)
+
 // NewServer - creates new HTTP server using given arguments.
 func NewServer(addrs []string, handler http.Handler, getCert certs.GetCertificateFunc) *Server {
+	secureCiphers := env.Get(enableSecureCiphersEnv, config.EnableOn) == config.EnableOn
+
 	var tlsConfig *tls.Config
 	if getCert != nil {
 		tlsConfig = &tls.Config{
 			// TLS hardening
 			PreferServerCipherSuites: true,
-			CipherSuites:             defaultCipherSuites,
-			CurvePreferences:         secureCurves,
 			MinVersion:               tls.VersionTLS12,
-			// Do not edit the next line, protos priority is kept
-			// on purpose in this manner for HTTP 2.0, we would
-			// still like HTTP 2.0 clients to negotiate connection
-			// to server if needed but by default HTTP 1.1 is
-			// expected. We need to change this in future
-			// when we wish to go back to HTTP 2.0 as default
-			// priority for HTTP protocol negotiation.
-			NextProtos: []string{"http/1.1", "h2"},
+			NextProtos:               []string{"h2", "http/1.1"},
 		}
 		tlsConfig.GetCertificate = getCert
 	}
 
+	if secureCiphers && tlsConfig != nil {
+		tlsConfig.CipherSuites = secureCipherSuites
+		tlsConfig.CurvePreferences = secureCurves
+	}
+
 	httpServer := &Server{
-		Addrs:               addrs,
-		ShutdownTimeout:     DefaultShutdownTimeout,
-		TCPKeepAliveTimeout: DefaultTCPKeepAliveTimeout,
+		Addrs:           addrs,
+		ShutdownTimeout: DefaultShutdownTimeout,
 	}
 	httpServer.Handler = handler
 	httpServer.TLSConfig = tlsConfig

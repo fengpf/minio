@@ -8,8 +8,6 @@ GOOS := $(shell go env GOOS)
 VERSION ?= $(shell git describe --tags)
 TAG ?= "minio/minio:$(VERSION)"
 
-BUILD_LDFLAGS := '$(LDFLAGS)'
-
 all: build
 
 checks:
@@ -18,22 +16,19 @@ checks:
 
 getdeps:
 	@mkdir -p ${GOPATH}/bin
-	@which golint 1>/dev/null || (echo "Installing golint" && GO111MODULE=off go get -u golang.org/x/lint/golint)
-ifeq ($(GOARCH),s390x)
-	@which staticcheck 1>/dev/null || (echo "Installing staticcheck" && GO111MODULE=off go get honnef.co/go/tools/cmd/staticcheck)
-else
-	@which staticcheck 1>/dev/null || (echo "Installing staticcheck" && wget --quiet https://github.com/dominikh/go-tools/releases/download/2019.2.3/staticcheck_${GOOS}_${GOARCH}.tar.gz && tar xf staticcheck_${GOOS}_${GOARCH}.tar.gz && mv staticcheck/staticcheck ${GOPATH}/bin/staticcheck && chmod +x ${GOPATH}/bin/staticcheck && rm -f staticcheck_${GOOS}_${GOARCH}.tar.gz && rm -rf staticcheck)
-endif
-	@which misspell 1>/dev/null || (echo "Installing misspell" && GO111MODULE=off go get -u github.com/client9/misspell/cmd/misspell)
+	@which golangci-lint 1>/dev/null || (echo "Installing golangci-lint" && curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(GOPATH)/bin v1.27.0)
+	@which ruleguard 1>/dev/null || (echo "Installing ruleguard" && GO111MODULE=off go get github.com/quasilyte/go-ruleguard/...)
+	@which msgp 1>/dev/null || (echo "Installing msgp" && GO111MODULE=off go get github.com/tinylib/msgp)
+	@which stringer 1>/dev/null || (echo "Installing stringer" && GO111MODULE=off go get golang.org/x/tools/cmd/stringer)
 
 crosscompile:
 	@(env bash $(PWD)/buildscripts/cross-compile.sh)
 
-verifiers: getdeps vet fmt lint staticcheck spelling
+verifiers: getdeps fmt lint ruleguard check-gen
 
-vet:
-	@echo "Running $@ check"
-	@GO111MODULE=on go vet github.com/minio/minio/...
+check-gen:
+	@go generate ./... >/dev/null
+	@(! git diff --name-only | grep '_gen.go$$') || (echo "Non-committed changes in auto-generated code is detected, please commit them to proceed." && false)
 
 fmt:
 	@echo "Running $@ check"
@@ -42,21 +37,12 @@ fmt:
 
 lint:
 	@echo "Running $@ check"
-	@GO111MODULE=on ${GOPATH}/bin/golint -set_exit_status github.com/minio/minio/cmd/...
-	@GO111MODULE=on ${GOPATH}/bin/golint -set_exit_status github.com/minio/minio/pkg/...
+	@GO111MODULE=on ${GOPATH}/bin/golangci-lint cache clean
+	@GO111MODULE=on ${GOPATH}/bin/golangci-lint run --timeout=5m --config ./.golangci.yml
 
-staticcheck:
+ruleguard:
 	@echo "Running $@ check"
-	@GO111MODULE=on ${GOPATH}/bin/staticcheck github.com/minio/minio/cmd/...
-	@GO111MODULE=on ${GOPATH}/bin/staticcheck github.com/minio/minio/pkg/...
-
-spelling:
-	@echo "Running $@ check"
-	@GO111MODULE=on ${GOPATH}/bin/misspell -locale US -error `find cmd/`
-	@GO111MODULE=on ${GOPATH}/bin/misspell -locale US -error `find pkg/`
-	@GO111MODULE=on ${GOPATH}/bin/misspell -locale US -error `find docs/`
-	@GO111MODULE=on ${GOPATH}/bin/misspell -locale US -error `find buildscripts/`
-	@GO111MODULE=on ${GOPATH}/bin/misspell -locale US -error `find dockerscripts/`
+	@${GOPATH}/bin/ruleguard -rules ruleguard.rules.go github.com/minio/minio/...
 
 # Builds minio, runs the verifiers then runs the tests.
 check: test
@@ -64,24 +50,30 @@ test: verifiers build
 	@echo "Running unit tests"
 	@GO111MODULE=on CGO_ENABLED=0 go test -tags kqueue ./... 1>/dev/null
 
+test-race: verifiers build
+	@echo "Running unit tests under -race"
+	@(env bash $(PWD)/buildscripts/race.sh)
+
 # Verify minio binary
-# TODO: enable races as well
-# @GO111MODULE=on CGO_ENABLED=1 go build -race -tags kqueue --ldflags $(BUILD_LDFLAGS) -o $(PWD)/minio 1>/dev/null
 verify:
-	@echo "Verifying build"
-	@GO111MODULE=on CGO_ENABLED=1 go build -tags kqueue --ldflags $(BUILD_LDFLAGS) -o $(PWD)/minio 1>/dev/null
+	@echo "Verifying build with race"
+	@GO111MODULE=on CGO_ENABLED=1 go build -race -tags kqueue -trimpath --ldflags "$(LDFLAGS)" -o $(PWD)/minio 1>/dev/null
 	@(env bash $(PWD)/buildscripts/verify-build.sh)
 
-coverage: build
-	@echo "Running all coverage for minio"
-	@(env bash $(PWD)/buildscripts/go-coverage.sh)
+# Verify healing of disks with minio binary
+verify-healing:
+	@echo "Verify healing build with race"
+	@GO111MODULE=on CGO_ENABLED=1 go build -race -tags kqueue -trimpath --ldflags "$(LDFLAGS)" -o $(PWD)/minio 1>/dev/null
+	@(env bash $(PWD)/buildscripts/verify-healing.sh)
 
 # Builds minio locally.
 build: checks
 	@echo "Building minio binary to './minio'"
-	@GO111MODULE=on CGO_ENABLED=0 go build -tags kqueue --ldflags $(BUILD_LDFLAGS) -o $(PWD)/minio 1>/dev/null
+	@GO111MODULE=on CGO_ENABLED=0 go build -tags kqueue -trimpath --ldflags "$(LDFLAGS)" -o $(PWD)/minio 1>/dev/null
 
-docker: build
+docker: checks
+	@echo "Building minio docker image '$(TAG)'"
+	@GOOS=linux GO111MODULE=on CGO_ENABLED=0 go build -tags kqueue -trimpath --ldflags "$(LDFLAGS)" -o $(PWD)/minio 1>/dev/null
 	@docker build -t $(TAG) . -f Dockerfile.dev
 
 # Builds minio and installs it to $GOPATH/bin.
@@ -97,3 +89,4 @@ clean:
 	@rm -rvf minio
 	@rm -rvf build
 	@rm -rvf release
+	@rm -rvf .verify*
